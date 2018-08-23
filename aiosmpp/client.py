@@ -107,7 +107,7 @@ class SMPPClientProtocol(asyncio.Protocol):
             self._close_session()
             return
 
-        bind_resp = pdu.bind_trx_resp(pkt['payload'])
+        bind_resp = pdu.decode_bind_trx_resp(pkt['payload'])
 
         if 0x0210 in bind_resp['tlvs'] and bind_resp['tlvs'][0x0210] > self.smpp_min_verison:
             print('SMPP Server minimum version ({0}) is higher than ours, cant continue'.format(bind_resp['tlvs'][0x0210]))
@@ -178,7 +178,7 @@ class SMPPManager(object):
     async def add_connection(self, name):
         # lookup name
 
-        conn = await self.loop.create_connection(lambda: SMPPClientProtocol(event_loop), '127.0.0.1', 2776)
+        conn = await self.loop.create_connection(lambda: SMPPClientProtocol(event_loop), '127.0.0.1', 8888)
 
         self.connections[name] = conn
 

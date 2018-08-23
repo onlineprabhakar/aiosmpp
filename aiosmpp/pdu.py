@@ -121,6 +121,21 @@ def read_c_octet_string(value: bytes, index: int=0, _max: int=0) -> Tuple[Union[
     return value[start:index-1].decode(), index
 
 
+def read_integer(value: bytes, index: int, octets: int) -> Tuple[int, int]:
+    result = 0
+
+    if octets == 1:
+        result = value[index]
+    if octets == 2:
+        result = struct.unpack_from('>H', value, index)
+    if octets == 4:
+        result = struct.unpack_from('>I', value, index)
+    if octets == 8:
+        result = struct.unpack_from('>Q', value, index)
+
+    return result, index + octets
+
+
 def read_tlv(payload: bytes, index: int=0) -> Tuple[int, bytes, int]:
     tag, length = struct.unpack_from('>HH', payload, index)
     index += 4
@@ -141,6 +156,13 @@ def read_tlvs(payload: bytes, index: int=0) -> Dict[int, Any]:
         result[tag] = data
 
     return result
+
+
+def create_tlv(tag: int, payload: bytes, length: int=None) -> bytes:
+    if length is None:
+        length = len(payload)
+
+    return struct.pack('>HH', tag, length) + payload
 
 
 def integer(value: Optional[int], octets: int=1) -> bytes:
@@ -179,6 +201,18 @@ def decode_header(payload: bytes) -> Dict[str, Any]:
     }
 
 
+def enquire_link(sequence_number: int) -> bytes:
+    return create_header(_id=CommandID.ENQUIRE_LINK,
+                         status=Status.ESME_ROK,  # Should be Null in Requsts, ROK == 0x00
+                         sequence_number=sequence_number)
+
+
+def enquire_link_resp(sequence_number: int) -> bytes:
+    return create_header(_id=CommandID.ENQUIRE_LINK_RESP,
+                         status=Status.ESME_ROK,
+                         sequence_number=sequence_number)
+
+
 def bind_trx(sequence_number: int,
              system_id: str,
              password: str,
@@ -202,15 +236,40 @@ def bind_trx(sequence_number: int,
                          payload=buffer)
 
 
-def enquire_link(sequence_number: int) -> bytes:
-    return create_header(_id=CommandID.ENQUIRE_LINK,
-                         status=Status.ESME_ROK,  # Should be Null in Requsts, ROK == 0x00
-                         sequence_number=sequence_number)
+def decode_bind_trx(payload: bytes, index: int=0) -> Dict[str, Any]:
+    system_id, index = read_c_octet_string(payload, index, _max=16)
+    password, index = read_c_octet_string(payload, index, _max=9)
+    system_type, index = read_c_octet_string(payload, index, _max=16)
+    interface_version, index = read_integer(payload, index, octets=1)
+    addr_ton, index = read_integer(payload, index, octets=1)
+    addr_npi, index = read_integer(payload, index, octets=1)
+    address_range, index = read_c_octet_string(payload, index, _max=41)
+
+    return {
+        'system_id': system_id,
+        'password': password,
+        'system_type': system_type,
+        'interface_version': interface_version,
+        'addr_ton': addr_ton,
+        'addr_npi': addr_npi,
+        'address_range': address_range
+    }
 
 
-def bind_trx_resp(payload):
-    index = 0
+def bind_trx_resp(sequence_number: int,
+                  system_id: str,
+                  interface_version: int=0x34) -> bytes:
 
+    buffer = c_octet_string(system_id, _max=16)
+    buffer += create_tlv(tag=0x0210, payload=bytes([interface_version]))
+
+    return create_header(_id=CommandID.BIND_TRANSCEIVER_RESP,
+                         status=Status.ESME_ROK,
+                         sequence_number=sequence_number,
+                         payload=buffer)
+
+
+def decode_bind_trx_resp(payload: bytes, index: int=0) -> Dict[str, Any]:
     system_id, index = read_c_octet_string(payload, index, _max=16)
     tlvs = read_tlvs(payload, index)
 
