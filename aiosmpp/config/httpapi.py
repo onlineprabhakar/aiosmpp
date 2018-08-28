@@ -18,9 +18,11 @@ class HTTPAPIConfig(object):
 
         for section in self._config.sections():
 
-            if section.startswith('filter:'):
+            if section.startswith('mo_route:') or section.startswith('smpp_bind:'):
+                continue
+            elif section.startswith('filter:'):
                 self._add_filter(section)
-            elif section.startswith('route:'):
+            elif section.startswith('mt_route:'):
                 self._add_route(section)
             else:
                 print('Unknown section: {0}'.format(section))
@@ -42,7 +44,6 @@ class HTTPAPIConfig(object):
             print('Route {0} already exists, overwriting'.format(name))
 
         self.routes[name] = data
-
 
     @classmethod
     def from_file(cls, filepath):

@@ -15,8 +15,7 @@ class SMPPConnectionState(enum.Enum):
 
 
 class SMPPClientProtocol(asyncio.Protocol):
-    def __init__(self, loop: Optional[asyncio.AbstractEventLoop]=None):
-        self.message = message
+    def __init__(self, config, loop: Optional[asyncio.AbstractEventLoop]=None):
         self.loop = loop
         self.smpp_min_verison = 0x34
         if not loop:
@@ -169,39 +168,39 @@ class SMPPClientProtocol(asyncio.Protocol):
             pass
 
 
-class SMPPManager(object):
-    def __init__(self, loop):
-        self.loop = loop
-
-        self.connections = {}
-
-    async def add_connection(self, name):
-        # lookup name
-
-        conn = await self.loop.create_connection(lambda: SMPPClientProtocol(event_loop), '127.0.0.1', 8888)
-
-        self.connections[name] = conn
-
-
-
-async def main(loop=None):
-    if loop is None:
-        loop = asyncio.get_event_loop()
-
-    manager = SMPPManager(loop=loop)
-    await manager.add_connection('test1')
-
-
-
-
-
-
-
-
-event_loop = asyncio.get_event_loop()
-message = 'Hello World!'
-# coro =
-# event_loop.run_until_complete(coro)
-event_loop.run_until_complete(main(loop=event_loop))
-event_loop.run_forever()
-event_loop.close()
+# class SMPPManager(object):
+#     def __init__(self, loop):
+#         self.loop = loop
+#
+#         self.connections = {}
+#
+#     async def add_connection(self, name):
+#         # lookup name
+#
+#         conn = await self.loop.create_connection(lambda: SMPPClientProtocol(event_loop), '127.0.0.1', 8888)
+#
+#         self.connections[name] = conn
+#
+#
+#
+# async def main(loop=None):
+#     if loop is None:
+#         loop = asyncio.get_event_loop()
+#
+#     manager = SMPPManager(loop=loop)
+#     await manager.add_connection('test1')
+#
+#
+#
+#
+#
+#
+#
+#
+# event_loop = asyncio.get_event_loop()
+# message = 'Hello World!'
+# # coro =
+# # event_loop.run_until_complete(coro)
+# event_loop.run_until_complete(main(loop=event_loop))
+# event_loop.run_forever()
+# event_loop.close()
