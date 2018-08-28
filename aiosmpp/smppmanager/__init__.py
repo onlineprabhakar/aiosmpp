@@ -81,6 +81,9 @@ class SMPPManager(object):
         # TODO hook up state change trigger
         # TODO re-bind after delay
 
+        # TODO generate queue name
+        # TODO create queue for connection
+
         pass
 
 
