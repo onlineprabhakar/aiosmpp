@@ -22,7 +22,8 @@ class SMPPClientProtocol(asyncio.Protocol):
             self.loop = asyncio.get_event_loop()
 
         self.transport = None
-        self.state = SMPPConnectionState.CLOSED
+        self.config: Dict[str, Any] = config
+        self.state: SMPPConnectionState = SMPPConnectionState.CLOSED
 
         # enquire_link
         self.enquire_link_enabled = True
@@ -53,8 +54,6 @@ class SMPPClientProtocol(asyncio.Protocol):
         self.transport = transport
         print('Connected to {0[0]}:{0[1]}'.format(self.transport.get_extra_info('peername')))
         self.state = SMPPConnectionState.OPEN
-
-        self.bind_trx()
 
     def data_received(self, data: bytes):
         print('Data received: {0}'.format(data))

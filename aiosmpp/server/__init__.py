@@ -13,6 +13,7 @@ class SMPPSessionState(enum.Enum):
     BOUND_TRX = enum.auto()  # Client connected and bound as TRX
     CLOSED = enum.auto()  # Client as unbound and closed network connection
 
+
 OPEN_COMMAND_IDS = (pdu.CommandID.BIND_TRANSMITTER, pdu.CommandID.BIND_RECEIVER, pdu.CommandID.BIND_TRANSCEIVER)
 ALL_BOUND_COMMAND_IDS = (pdu.CommandID.ENQUIRE_LINK, pdu.CommandID.UNBIND, pdu.CommandID.DATA_SM)
 BOUND_TRX_COMMAND_IDS = ALL_BOUND_COMMAND_IDS
@@ -69,6 +70,7 @@ class SMPPServer(asyncio.Protocol):
                 print('Command ID {0} not supported whilst in BOUND_TRX state'.format(command_id))
                 self.transport.close()
             elif command_id == pdu.CommandID.ENQUIRE_LINK:
+                print('Sending enquire_link_resp')
                 self._handle_enquire_link(sequence_no)
             else:
                 # All other stuff, not handled
@@ -124,7 +126,7 @@ if __name__ == '__main__':
     server = loop.run_until_complete(coro)
 
     # Serve requests until Ctrl+C is pressed
-    print('Serving on {}'.format(server.sockets[0].getsockname()))
+    print('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))
     try:
         loop.run_forever()
     except KeyboardInterrupt:
