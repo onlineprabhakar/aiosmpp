@@ -38,7 +38,6 @@ def app(argv: list=None) -> web.Application:
     smpp_manager = SMPPManager(config=config)
     print('Initialising Web API')
     web_server = WebHandler(smpp_manager=smpp_manager, config=config)
-    # TODO web_server run await mgmr.setup(
 
     return web_server.app()
 

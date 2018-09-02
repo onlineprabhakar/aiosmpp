@@ -2,12 +2,12 @@ import argparse
 import asyncio
 import os
 import sys
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple, Any
 
 from slugify import slugify
 
 from aiosmpp.config.smpp import SMPPConfig
-from aiosmpp.client import SMPPClientProtocol
+from aiosmpp.client import SMPPClientProtocol, SMPPConnectionState
 
 
 def try_format(value, func, default=None, warn_str=None, allow_none=False):
@@ -23,6 +23,83 @@ def try_format(value, func, default=None, warn_str=None, allow_none=False):
     return value
 
 
+class SMPPConnector(object):
+    def __init__(self, config: Dict[str, Any], loop: Optional[asyncio.AbstractEventLoop]=None):
+        self.config = config
+        self._proto: SMPPClientProtocol = None
+
+        self._loop = loop
+        if not loop:
+            self._loop = asyncio.get_event_loop()
+
+    @property
+    def state(self) -> SMPPConnectionState:
+        if self._proto:
+            return self._proto.state
+        return SMPPConnectionState.CLOSED
+
+    async def run(self):
+        # Try and connect
+        await self._do_connect_or_retry()
+
+        while True:
+            # print('sleeping')
+            await asyncio.sleep(10)
+
+    async def _do_reconnect(self):
+        if self.config['conn_loss_retry']:
+            # Do reconnect if config says yes
+            await asyncio.sleep(self.config['conn_loss_delay'])
+            await self._do_connect_or_retry()
+
+    async def _do_connect_or_retry(self):
+        if not self._proto:
+            self._proto = None
+            try:
+                sock, conn = await self._loop.create_connection(
+                    lambda: SMPPClientProtocol(config=self.config, loop=self._loop),
+                    self.config['host'],
+                    self.config['port']
+                )
+
+                self._proto = conn
+                self._proto.set_connection_lost_callback(self.connection_lost_trigger)
+
+            except ConnectionRefusedError:
+                self._proto = None
+                print('Cant connect to {0}:{1}, retrying'.format(self.config['host'], self.config['port']))
+                asyncio.ensure_future(self._do_reconnect())
+
+        if self._proto:
+            # If proto is not None but is closed, do reconnect
+            if self._proto.state == SMPPConnectionState.CLOSED:
+                print('Connection closed, retrying')
+                try:
+                    self._proto.close()
+                except Exception:
+                    pass
+                self._proto = None
+                asyncio.ensure_future(self._do_reconnect())
+
+            # If proto is not None and is connected, do bind
+            elif self._proto.state == SMPPConnectionState.OPEN:
+                if self.config['bind_type'] == 'TX':
+                    raise NotImplementedError()
+                elif self.config['bind_type'] == 'RX':
+                    raise NotImplementedError()
+                else:  # TRX
+                    self._proto.bind_trx()
+
+    def connection_lost_trigger(self):
+        print('Connection closed, retrying')
+        try:
+            self._proto.close()
+        except Exception:
+            pass
+        self._proto = None
+        asyncio.ensure_future(self._do_reconnect())
+
+
 class SMPPManager(object):
     def __init__(self, config: Optional[SMPPConfig]=None, loop: asyncio.AbstractEventLoop=None):
         self.loop = loop
@@ -31,7 +108,7 @@ class SMPPManager(object):
 
         self.config = config
 
-        self.connectors: Dict[str, SMPPClientProtocol] = {}
+        self.connectors: Dict[str, Tuple[SMPPConnector, asyncio.Future]] = {}
 
     async def setup(self):
         # Loop through config
@@ -56,7 +133,7 @@ class SMPPManager(object):
             'systemid': data['systemid'],
             'password': data['password'],
             'conn_loss_retry': data.get('conn_loss_retry', 'yes').lower() == 'yes',
-            'conn_loss_delay': int(data.get('src_ton', '30')),
+            'conn_loss_delay': int(data.get('conn_loss_delay', '30')),
             'priority': int(data.get('priority', '0')),
             'submit_throughput': int(data.get('submit_throughput', '1')),
             'coding': int(data.get('coding', '1')),
@@ -85,22 +162,14 @@ class SMPPManager(object):
             print('bind_type ({0}) is not TX, RX, TRX. Setting to TRX'.format(smpp_config['bind_type']))
             smpp_config['bind_type'] = 'TRX'
 
-        _, conn = await self.loop.create_connection(lambda: SMPPClientProtocol(config=smpp_config, loop=self.loop), smpp_config['host'], smpp_config['port'])
-        self.connectors[name] = conn
+        conn = SMPPConnector(config=smpp_config)
+        future = asyncio.ensure_future(conn.run())
 
-        if smpp_config['bind_type'] == 'TX':
-            raise NotImplementedError()
-        elif smpp_config['bind_type'] == 'RX':
-            raise NotImplementedError()
-        else:  # TRX
-            conn.bind_trx()
+        self.connectors[name] = (conn, future)
 
-        # TODO hook up connection lost trigger
         # TODO hook up state change trigger
-        # TODO re-bind after delay
 
         # TODO create queue for connection
-
 
 
 async def main():
