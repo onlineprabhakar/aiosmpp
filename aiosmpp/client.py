@@ -49,7 +49,10 @@ class SMPPClientProtocol(asyncio.Protocol):
         self.close()
 
     def close(self):
-        self._close_session()
+        try:
+            self._close_session()
+        except:
+            pass
 
     def set_connection_lost_callback(self, func: Callable[[], None]):
         self.conn_lost_trigger = func

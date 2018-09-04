@@ -32,6 +32,23 @@ class SMPPConnector(object):
         if not loop:
             self._loop = asyncio.get_event_loop()
 
+        self._do_reconnect_future = None
+
+    def __del__(self):
+        self.close()
+
+    def close(self):
+        try:
+            self._proto.close()
+        except Exception:
+            pass
+        self._proto = None
+        try:
+            if self._do_reconnect_future:
+                self._do_reconnect_future.cancel()
+        except:
+            pass
+
     @property
     def state(self) -> SMPPConnectionState:
         if self._proto:
@@ -47,10 +64,13 @@ class SMPPConnector(object):
             await asyncio.sleep(10)
 
     async def _do_reconnect(self):
-        if self.config['conn_loss_retry']:
-            # Do reconnect if config says yes
-            await asyncio.sleep(self.config['conn_loss_delay'])
-            await self._do_connect_or_retry()
+        try:
+            if self.config['conn_loss_retry']:
+                # Do reconnect if config says yes
+                await asyncio.sleep(self.config['conn_loss_delay'])
+                await self._do_connect_or_retry()
+        except asyncio.CancelledError:
+            pass
 
     async def _do_connect_or_retry(self):
         if not self._proto:
@@ -68,7 +88,9 @@ class SMPPConnector(object):
             except ConnectionRefusedError:
                 self._proto = None
                 print('Cant connect to {0}:{1}, retrying'.format(self.config['host'], self.config['port']))
-                asyncio.ensure_future(self._do_reconnect())
+
+                self._do_reconnect_future = asyncio.ensure_future(self._do_reconnect())
+
 
         if self._proto:
             # If proto is not None but is closed, do reconnect
@@ -79,7 +101,7 @@ class SMPPConnector(object):
                 except Exception:
                     pass
                 self._proto = None
-                asyncio.ensure_future(self._do_reconnect())
+                self._do_reconnect_future = asyncio.ensure_future(self._do_reconnect())
 
             # If proto is not None and is connected, do bind
             elif self._proto.state == SMPPConnectionState.OPEN:
@@ -92,12 +114,8 @@ class SMPPConnector(object):
 
     def connection_lost_trigger(self):
         print('Connection closed, retrying')
-        try:
-            self._proto.close()
-        except Exception:
-            pass
-        self._proto = None
-        asyncio.ensure_future(self._do_reconnect())
+        self.close()
+        self._do_reconnect_future = asyncio.ensure_future(self._do_reconnect())
 
 
 class SMPPManager(object):
@@ -120,6 +138,14 @@ class SMPPManager(object):
                 await self.add_connector(connector_id, connector_data)
 
         print('Finished setup')
+
+    async def teardown(self):
+        for conn, future in self.connectors.values():
+            try:
+                conn.close()
+                future.cancel()
+            except:
+                pass
 
     async def add_connector(self, name: str, data: Dict[str, str]):
 
