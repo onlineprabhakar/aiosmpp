@@ -1,9 +1,10 @@
 import argparse
 import asyncio
 import enum
+import logging
 from typing import Dict, Any
 
-from aiosmpp import pdu
+from aiosmpp import pdu, log
 
 
 class SMPPSessionState(enum.Enum):
@@ -20,9 +21,10 @@ BOUND_TRX_COMMAND_IDS = ALL_BOUND_COMMAND_IDS
 
 
 class SMPPServer(asyncio.Protocol):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, logger: logging.Logger, **kwargs):
         super(SMPPServer, self).__init__(*args, **kwargs)
 
+        self.logger = logger
         self.transport = None
 
         self._state = SMPPSessionState.CLOSED
@@ -34,12 +36,12 @@ class SMPPServer(asyncio.Protocol):
 
     @state.setter
     def state(self, value: SMPPSessionState):
-        print('SMPP State transition from {0} -> {1}'.format(self._state, value))
+        self.logger.debug('SMPP State transition from {0} -> {1}'.format(self._state, value))
         self._state = value
 
     def connection_made(self, transport):
         peername = transport.get_extra_info('peername')
-        print('Connection from {}'.format(peername))
+        self.logger.info('Connection from {}'.format(peername))
         self.state = SMPPSessionState.OPEN
         self.transport = transport
 
@@ -55,7 +57,7 @@ class SMPPServer(asyncio.Protocol):
         # OPEN, so not bound yet
         if self.state == SMPPSessionState.OPEN:
             if command_id not in OPEN_COMMAND_IDS:
-                print('Command ID {0} not supported whilst in OPEN state'.format(command_id))
+                self.logger.warning('Command ID {0} not supported whilst in OPEN state. Closing'.format(command_id))
                 self.transport.close()
             elif command_id == pdu.CommandID.BIND_TRANSMITTER:
                 self._handle_bind('transmitter', sequence_no, payload)
@@ -67,23 +69,29 @@ class SMPPServer(asyncio.Protocol):
         # ALL BIND TYPES
         elif self.state == SMPPSessionState.BOUND_TRX:
             if command_id not in BOUND_TRX_COMMAND_IDS:
-                print('Command ID {0} not supported whilst in BOUND_TRX state'.format(command_id))
+                self.logger.warning('Command ID {0} not supported whilst in BOUND_TRX state. Closing'.format(command_id))
                 self.transport.close()
             elif command_id == pdu.CommandID.ENQUIRE_LINK:
-                print('Sending enquire_link_resp')
+                self.logger.debug('Sending enquire_link_resp')
                 self._handle_enquire_link(sequence_no)
+            elif command_id == pdu.CommandID.SUBMIT_SM:
+                self._handle_submit_sm(sequence_no, payload)
             else:
                 # All other stuff, not handled
+                self.logger.error('Unknown command id {0}'.format(command_id))
                 raise NotImplementedError()
 
         else:
+            self.logger.error('Unknown state'.format(self.state))
             raise NotImplementedError()
 
     # Handlers
     def _handle_bind(self, _type: str, sequence_id: int, payload: bytes):
         if _type == 'transmitter':
+            self.logger.error('transmitter bind not implemented')
             raise NotImplementedError()
         elif _type == 'receiver':
+            self.logger.error('receiver bind not implemented')
             raise NotImplementedError()
         else:  # transceiver
             request = pdu.decode_bind_trx(payload)
@@ -102,6 +110,11 @@ class SMPPServer(asyncio.Protocol):
         payload = pdu.enquire_link_resp(sequence_id)
         self.transport.write(payload)
 
+    def _handle_submit_sm(self, sequence_id: int, payload: bytes):
+        request = pdu.decode_submit_sm(payload)
+
+        
+
     # Handlers to override
     def handle_bind_transmitter(self, request: Dict[str, Any]) -> bool:
         return True
@@ -110,7 +123,7 @@ class SMPPServer(asyncio.Protocol):
         return True
 
     def handle_bind_transceiver(self, request: Dict[str, Any]) -> bool:
-        print('Bind TRX from {0}, pw {1}, system_type {2}'.format(request['system_id'], request['password'], request['system_type']))
+        self.logger.info('Bind TRX from {0}, pw {1}, system_type {2}'.format(request['system_id'], request['password'], request['system_type']))
         return True
 
 
@@ -118,15 +131,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--address', default='0.0.0.0', help='Address to listen on')
     parser.add_argument('--port', default=2775, type=int, help='Port to listen on')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose mode')
 
     args = parser.parse_args()
 
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logger = log.get_stdout_logger('server', log_level)
+
     loop = asyncio.get_event_loop()
-    coro = loop.create_server(SMPPServer, args.address, args.port)
+    coro = loop.create_server(lambda: SMPPServer(logger=logger), args.address, args.port)
     server = loop.run_until_complete(coro)
 
     # Serve requests until Ctrl+C is pressed
-    print('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))
+    logger.info('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))
     try:
         loop.run_forever()
     except KeyboardInterrupt:
