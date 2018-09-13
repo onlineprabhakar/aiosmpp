@@ -13,7 +13,7 @@ make server-echo
 
 # Running JasminD
 ```bash
-docker run --rm -p 1401:1401 -p 2775:2775 -p 8990:8990 --name jasmin_01 jookies/jasmin:latest
+docker run --rm -p 1401:1401 -p 8990:8990 --name jasmin_01 jookies/jasmin:latest
 docker exec -it jasmin_01 tail -f /var/log/jasmin/messages.log
 ```
 
@@ -97,6 +97,9 @@ src_ton 1
 src_npi 1
 ok
 
+
+
+
 mtrouter -a
 order 0
 type DefaultRoute
@@ -104,8 +107,12 @@ connector smppc(testconnector)
 rate 0.00
 ok
 
-smppccm -1 testconnector
 persist
+
+
+
+
+smppccm -1 testconnector
 ```
 
 ```bash

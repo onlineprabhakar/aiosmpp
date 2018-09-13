@@ -92,6 +92,31 @@ TLV_MAP = {
 }
 
 
+def octet_string(value: Optional[bytes], _max: int=0) -> bytes:
+    if value is None:
+        return b'\x00'
+
+    if _max > 0 and len(value) > _max -1:
+        value = value[:_max-1]
+
+    return value
+
+
+def read_octet_string(value: bytes, index: int=0, _max: int=0) -> Tuple[Union[bytes, None], int]:
+    start = index
+
+    payload_len = len(value)
+    _max += index
+    while index < _max and index < payload_len:
+        index += 1
+
+    if value[start:index] == b'\x00':
+        return None, index
+
+    # index-1 then decodes string excluding the null byte
+    return value[start:index], index
+
+
 def c_octet_string(value: Optional[str], _max: int=0) -> bytes:
     if value is None:
         return b'\x00'
@@ -201,6 +226,7 @@ def decode_header(payload: bytes) -> Dict[str, Any]:
     }
 
 
+# Enquire link
 def enquire_link(sequence_number: int) -> bytes:
     return create_header(_id=CommandID.ENQUIRE_LINK,
                          status=Status.ESME_ROK,  # Should be Null in Requsts, ROK == 0x00
@@ -213,6 +239,7 @@ def enquire_link_resp(sequence_number: int) -> bytes:
                          sequence_number=sequence_number)
 
 
+# Bind TRX
 def bind_trx(sequence_number: int,
              system_id: str,
              password: str,
@@ -277,3 +304,61 @@ def decode_bind_trx_resp(payload: bytes, index: int=0) -> Dict[str, Any]:
         'system_id': system_id,
         'tlvs': tlvs
     }
+
+
+# Submit SM
+def decode_submit_sm(payload: bytes, index: int=0) -> Dict[str, Any]:
+    service_type, index = read_c_octet_string(payload, index, _max=6)
+    source_addr_ton, index = read_integer(payload, index, octets=1)
+    source_addr_npi, index = read_integer(payload, index, octets=1)
+    source_addr, index = read_c_octet_string(payload, index, _max=21)
+    dest_addr_ton, index = read_integer(payload, index, octets=1)
+    dest_addr_npi, index = read_integer(payload, index, octets=1)
+    dest_addr, index = read_c_octet_string(payload, index, _max=21)
+    esm_class, index = read_integer(payload, index, octets=1)
+    protocol_id, index = read_integer(payload, index, octets=1)
+    priority_flag, index = read_integer(payload, index, octets=1)
+    schedule_delivery_time, index = read_c_octet_string(payload, index, _max=17)
+    validity_period, index = read_c_octet_string(payload, index, _max=17)
+    registered_delivery, index = read_integer(payload, index, octets=1)
+    replace_if_present_flag, index = read_integer(payload, index, octets=1)
+    data_coding, index = read_integer(payload, index, octets=1)
+    sm_default_msg_id, index = read_integer(payload, index, octets=1)
+    sm_length, index = read_integer(payload, index, octets=1)
+    short_message, index = read_octet_string(payload, index, _max=254)
+
+    tlvs = read_tlvs(payload, index)
+
+    return {
+        'service_type': service_type,
+        'source_addr_ton': source_addr_ton,
+        'source_addr_npi': source_addr_npi,
+        'source_addr': source_addr,
+        'dest_addr_ton': dest_addr_ton,
+        'dest_addr_npi': dest_addr_npi,
+        'dest_addr': dest_addr,
+        'esm_class': esm_class,
+        'protocol_id': protocol_id,
+        'priority_flag': priority_flag,
+        'schedule_delivery_time': schedule_delivery_time,
+        'validity_period': validity_period,
+        'registered_delivery': registered_delivery,
+        'replace_if_present_flag': replace_if_present_flag,
+        'data_coding': data_coding,
+        'sm_default_msg_id': sm_default_msg_id,
+        'sm_length': sm_length,
+        'short_message': short_message,
+        'tlvs': tlvs
+    }
+
+
+def submit_sm_resp(sequence_number: int, msg_id: str, status=Status.ESME_ROK) -> bytes:
+    buffer = b''
+
+    if status == Status.ESME_ROK:
+        buffer += c_octet_string(msg_id, _max=65)
+
+    return create_header(_id=CommandID.SUBMIT_SM_RESP,
+                         status=status,
+                         sequence_number=sequence_number,
+                         payload=buffer)

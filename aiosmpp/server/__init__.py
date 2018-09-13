@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import enum
 import logging
+import uuid
 from typing import Dict, Any
 
 from aiosmpp import pdu, log
@@ -17,7 +18,7 @@ class SMPPSessionState(enum.Enum):
 
 OPEN_COMMAND_IDS = (pdu.CommandID.BIND_TRANSMITTER, pdu.CommandID.BIND_RECEIVER, pdu.CommandID.BIND_TRANSCEIVER)
 ALL_BOUND_COMMAND_IDS = (pdu.CommandID.ENQUIRE_LINK, pdu.CommandID.UNBIND, pdu.CommandID.DATA_SM)
-BOUND_TRX_COMMAND_IDS = ALL_BOUND_COMMAND_IDS
+BOUND_TRX_COMMAND_IDS = ALL_BOUND_COMMAND_IDS + (pdu.CommandID.SUBMIT_SM,)
 
 
 class SMPPServer(asyncio.Protocol):
@@ -113,6 +114,11 @@ class SMPPServer(asyncio.Protocol):
     def _handle_submit_sm(self, sequence_id: int, payload: bytes):
         request = pdu.decode_submit_sm(payload)
 
+        # TODO raise SMPPError with errocode + msg to log out
+        msg_id = self.handle_submit_sm(request)
+
+        response = pdu.submit_sm_resp(sequence_id, msg_id, status=pdu.Status.ESME_ROK)
+        self.transport.write(response)
         
 
     # Handlers to override
@@ -125,6 +131,17 @@ class SMPPServer(asyncio.Protocol):
     def handle_bind_transceiver(self, request: Dict[str, Any]) -> bool:
         self.logger.info('Bind TRX from {0}, pw {1}, system_type {2}'.format(request['system_id'], request['password'], request['system_type']))
         return True
+
+    def handle_submit_sm(self, request: Dict[str, Any]) -> str:
+        # TODO deal with all the logic of msg combining, getting short_message from tlv if needed
+        #
+        self.logger.info('SMS MT {0} -> {1}: {2}'.format(request['source_addr'], request['dest_addr'], request['short_message']))
+
+        # TODO schedule DLRs
+
+        # Return MSG ID
+        msg_id = str(uuid.uuid4()).upper().replace('-', '')
+        return msg_id
 
 
 if __name__ == '__main__':
