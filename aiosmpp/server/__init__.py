@@ -1,11 +1,12 @@
 import argparse
 import asyncio
+import datetime
 import enum
 import logging
 import uuid
 from typing import Dict, Any
 
-from aiosmpp import pdu, log
+from aiosmpp import pdu, log, constants as const
 
 
 class SMPPSessionState(enum.Enum):
@@ -18,7 +19,7 @@ class SMPPSessionState(enum.Enum):
 
 OPEN_COMMAND_IDS = (pdu.CommandID.BIND_TRANSMITTER, pdu.CommandID.BIND_RECEIVER, pdu.CommandID.BIND_TRANSCEIVER)
 ALL_BOUND_COMMAND_IDS = (pdu.CommandID.ENQUIRE_LINK, pdu.CommandID.UNBIND, pdu.CommandID.DATA_SM)
-BOUND_TRX_COMMAND_IDS = ALL_BOUND_COMMAND_IDS + (pdu.CommandID.SUBMIT_SM,)
+BOUND_TRX_COMMAND_IDS = ALL_BOUND_COMMAND_IDS + (pdu.CommandID.SUBMIT_SM, pdu.CommandID.DELIVER_SM_RESP)
 
 
 class SMPPServer(asyncio.Protocol):
@@ -30,6 +31,17 @@ class SMPPServer(asyncio.Protocol):
 
         self._state = SMPPSessionState.CLOSED
         self.unacknowledged_requests = {}
+
+        self._sequence_number = 0
+
+    @property
+    def sequence_number(self) -> int:
+        return self._sequence_number + 1
+
+    @sequence_number.setter
+    def sequence_number(self, value: int):
+        if value > self._sequence_number:
+            self._sequence_number = value
 
     @property
     def state(self) -> SMPPSessionState:
@@ -55,6 +67,10 @@ class SMPPServer(asyncio.Protocol):
         command_id = header['id']
         sequence_no = header['seq_no']
 
+        # Store highest sequence number incase we need to asyncronously
+        # speak to the client
+        self.sequence_number = sequence_no
+
         # OPEN, so not bound yet
         if self.state == SMPPSessionState.OPEN:
             if command_id not in OPEN_COMMAND_IDS:
@@ -77,6 +93,8 @@ class SMPPServer(asyncio.Protocol):
                 self._handle_enquire_link(sequence_no)
             elif command_id == pdu.CommandID.SUBMIT_SM:
                 self._handle_submit_sm(sequence_no, payload)
+            elif command_id == pdu.CommandID.DELIVER_SM_RESP:
+                self._handle_deliver_sm_resp(sequence_no, payload)
             else:
                 # All other stuff, not handled
                 self.logger.error('Unknown command id {0}'.format(command_id))
@@ -119,7 +137,9 @@ class SMPPServer(asyncio.Protocol):
 
         response = pdu.submit_sm_resp(sequence_id, msg_id, status=pdu.Status.ESME_ROK)
         self.transport.write(response)
-        
+
+    def _handle_deliver_sm_resp(self, sequence_id: int, payload: bytes):
+        pass
 
     # Handlers to override
     def handle_bind_transmitter(self, request: Dict[str, Any]) -> bool:
@@ -135,13 +155,49 @@ class SMPPServer(asyncio.Protocol):
     def handle_submit_sm(self, request: Dict[str, Any]) -> str:
         # TODO deal with all the logic of msg combining, getting short_message from tlv if needed
         #
+        msg_id = str(uuid.uuid4()).lower().replace('-', '')
+
         self.logger.info('SMS MT {0} -> {1}: {2}'.format(request['source_addr'], request['dest_addr'], request['short_message']))
 
-        # TODO schedule DLRs
+        coro = self.send_dlr(msg_id, request, const.MessageState.DELIVERED, datetime.datetime.utcnow())
+        asyncio.ensure_future(coro)
 
         # Return MSG ID
-        msg_id = str(uuid.uuid4()).upper().replace('-', '')
         return msg_id
+
+    async def send_dlr(self, msg_id: str, original_request: Dict[str, Any], state: const.MessageState, submit_time: datetime.datetime):
+        await asyncio.sleep(10)
+        self.logger.info('Sending DELIVRD notification for {0} -> {1}'.format(original_request['source_addr'], original_request['dest_addr']))
+        msg = 'id:{0} dlvrd:001 submit date:{1} done date:{2} stat:{3} err:000 text:'.format(
+            msg_id,
+            submit_time.strftime('%y%M%d%H%M'),
+            datetime.datetime.utcnow().strftime('%y%M%d%H%M'),
+            state.short
+        ).encode()
+
+        payload = pdu.deliver_sm(
+            self.sequence_number,
+            service_type='',
+            source_addr_ton=original_request['source_addr_ton'],
+            source_addr_npi=original_request['source_addr_npi'],
+            source_addr=original_request['source_addr'],
+            dest_addr_ton=original_request['dest_addr_ton'],
+            dest_addr_npi=original_request['dest_addr_npi'],
+            dest_addr=original_request['dest_addr'],
+            esm_class=int(const.ESMClass.MESSAGE_TYPE_CONTAINS_ACK),
+            protocol_id=0x00,
+            priority_flag=int(const.PriorityFlag.LEVEL_0),
+            schedule_delivery_time=original_request['schedule_delivery_time'],
+            validity_period=original_request['validity_period'],
+            registered_delivery=original_request['registered_delivery'],
+            replace_if_present_flag=original_request['replace_if_present_flag'],
+            data_coding=original_request['replace_if_present_flag'],
+            sm_default_msg_id=0x00,
+            sm_length=len(msg),
+            short_message=msg
+        )
+        # TODO setup timer to catch the resp
+        self.transport.write(payload)
 
 
 if __name__ == '__main__':
@@ -156,8 +212,8 @@ if __name__ == '__main__':
     logger = log.get_stdout_logger('server', log_level)
 
     loop = asyncio.get_event_loop()
-    coro = loop.create_server(lambda: SMPPServer(logger=logger), args.address, args.port)
-    server = loop.run_until_complete(coro)
+    server_coro = loop.create_server(lambda: SMPPServer(logger=logger), args.address, args.port)
+    server = loop.run_until_complete(server_coro)
 
     # Serve requests until Ctrl+C is pressed
     logger.info('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))

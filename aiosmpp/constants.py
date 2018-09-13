@@ -67,3 +67,47 @@ class MoreMessagesToSend(enum.IntEnum):
     NO_MORE_MESSAGES = 0x00
     MORE_MESSAGES = 0x01
 
+
+MESSAGE_STATE_SHORT = {
+    'ENROUTE':       'ENROUTE',
+    'DELIVERED':     'DELIVRD',
+    'EXPIRED':       'EXPIRED',
+    'DELETED':       'DELETED',
+    'UNDELIVERABLE': 'UNDELIV',
+    'ACCEPTED':      'ACCEPTD',
+    'UNKNOWN':       'UNKNOWN',
+    'REJECTED':      'REJECTD'
+}
+
+class MessageState(enum.IntEnum):
+    ENROUTE = 1
+    DELIVERED = 2
+    EXPIRED = 3
+    DELETED = 4
+    UNDELIVERABLE = 5
+    ACCEPTED = 6
+    UNKNOWN = 7
+    REJECTED = 8
+
+    @property
+    def short(self) -> str:
+        try:
+            return MESSAGE_STATE_SHORT[self.name]
+        except KeyError:
+            return 'UNKNOWN'
+
+
+class ESMClass(enum.IntFlag):
+    MESSAGEING_MODE_DEFAULT = 0b00_0000_00
+    MESSAGEING_MODE_DATAGRAM = 0b00_0000_01
+    MESSAGEING_MODE_FORWARD = 0b00_0000_10
+    MESSAGEING_MODE_STORE_AND_FORWARD = 0b00_0000_11
+
+    MESSAGE_TYPE_DEFAULT = 0b00_0000_00
+    MESSAGE_TYPE_CONTAINS_ACK = 0b00_0010_00
+    MESSAGE_TYPE_CONTAINS_MANUAL_ACK = 0b00_0100_00
+
+    GSM_FEATURES_NONE = 0b00_0000_00
+    GSM_FEATURES_UDHI = 0b01_0000_00
+    GSM_FEATURES_REPLY_PATH = 0b10_0000_00
+    GSM_FEATURES_UDHI_AND_REPLY_PATH = 0b11_0000_00

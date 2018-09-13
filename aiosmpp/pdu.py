@@ -1,6 +1,6 @@
 import struct
 import enum
-from typing import Union, Tuple, Dict, Any, Optional
+from typing import Union, Tuple, List, Dict, Any, Optional
 
 
 class DecodeException(Exception):
@@ -96,8 +96,8 @@ def octet_string(value: Optional[bytes], _max: int=0) -> bytes:
     if value is None:
         return b'\x00'
 
-    if _max > 0 and len(value) > _max -1:
-        value = value[:_max-1]
+    if 0 < _max < len(value):
+        value = value[:_max]
 
     return value
 
@@ -360,5 +360,56 @@ def submit_sm_resp(sequence_number: int, msg_id: str, status=Status.ESME_ROK) ->
 
     return create_header(_id=CommandID.SUBMIT_SM_RESP,
                          status=status,
+                         sequence_number=sequence_number,
+                         payload=buffer)
+
+
+# Deliver SM
+def deliver_sm(sequence_number: int,
+               service_type: str,
+               source_addr_ton: int,
+               source_addr_npi: int,
+               source_addr: str,
+               dest_addr_ton: int,
+               dest_addr_npi: int,
+               dest_addr: str,
+               esm_class: int,
+               protocol_id: int,
+               priority_flag: int,
+               schedule_delivery_time: str,
+               validity_period: str,
+               registered_delivery: int,
+               replace_if_present_flag: int,
+               data_coding: int,
+               sm_default_msg_id: int,
+               sm_length: int,
+               short_message: bytes,
+               tlvs: Optional[List[bytes]]=None) -> bytes:
+
+    buffer = c_octet_string(service_type, _max=6)
+    buffer += integer(source_addr_ton, octets=1)
+    buffer += integer(source_addr_npi, octets=1)
+    buffer += c_octet_string(source_addr, _max=21)
+    buffer += integer(dest_addr_ton, octets=1)
+    buffer += integer(dest_addr_npi, octets=1)
+    buffer += c_octet_string(dest_addr, _max=21)
+    buffer += integer(esm_class, octets=1)
+    buffer += integer(protocol_id, octets=1)
+    buffer += integer(priority_flag, octets=1)
+    buffer += c_octet_string(schedule_delivery_time, _max=1)
+    buffer += c_octet_string(validity_period, _max=1)
+    buffer += integer(registered_delivery, octets=1)
+    buffer += integer(replace_if_present_flag, octets=1)
+    buffer += integer(data_coding, octets=1)
+    buffer += integer(sm_default_msg_id, octets=1)
+    buffer += integer(sm_length, octets=1)
+    buffer += octet_string(short_message, _max=254)
+
+    if tlvs:
+        for tlv in tlvs:
+            buffer += tlv
+
+    return create_header(_id=CommandID.DELIVER_SM,
+                         status=Status.ESME_ROK,
                          sequence_number=sequence_number,
                          payload=buffer)
