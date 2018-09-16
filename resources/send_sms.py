@@ -1,4 +1,7 @@
 #!/usr/bin/env python2
+"""
+Send SMS via Jasmin's HTTP API
+"""
 import urllib2
 import urllib
 

@@ -4,7 +4,7 @@ import datetime
 import enum
 import logging
 import uuid
-from typing import Dict, Any
+from typing import Dict, Any, Type
 
 from aiosmpp import pdu, log, constants as const
 
@@ -22,9 +22,9 @@ ALL_BOUND_COMMAND_IDS = (pdu.CommandID.ENQUIRE_LINK, pdu.CommandID.UNBIND, pdu.C
 BOUND_TRX_COMMAND_IDS = ALL_BOUND_COMMAND_IDS + (pdu.CommandID.SUBMIT_SM, pdu.CommandID.DELIVER_SM_RESP)
 
 
-class SMPPServer(asyncio.Protocol):
+class RawSMPPServer(asyncio.Protocol):
     def __init__(self, *args, logger: logging.Logger, **kwargs):
-        super(SMPPServer, self).__init__(*args, **kwargs)
+        super(RawSMPPServer, self).__init__(*args, **kwargs)
 
         self.logger = logger
         self.transport = None
@@ -154,65 +154,23 @@ class SMPPServer(asyncio.Protocol):
 
     def handle_submit_sm(self, request: Dict[str, Any]) -> str:
         # TODO deal with all the logic of msg combining, getting short_message from tlv if needed
-        #
         msg_id = str(uuid.uuid4()).lower().replace('-', '')
 
         self.logger.info('SMS MT {0} -> {1}: {2}'.format(request['source_addr'], request['dest_addr'], request['short_message']))
-
-        coro = self.send_dlr(msg_id, request, const.MessageState.DELIVERED, datetime.datetime.utcnow())
-        asyncio.ensure_future(coro)
+        self.logger.debug('Values: {0}'.format(request))
 
         # Return MSG ID
         return msg_id
 
-    async def send_dlr(self, msg_id: str, original_request: Dict[str, Any], state: const.MessageState, submit_time: datetime.datetime):
-        await asyncio.sleep(10)
-        self.logger.info('Sending DELIVRD notification for {0} -> {1}'.format(original_request['source_addr'], original_request['dest_addr']))
-        msg = 'id:{0} dlvrd:001 submit date:{1} done date:{2} stat:{3} err:000 text:'.format(
-            msg_id,
-            submit_time.strftime('%y%M%d%H%M'),
-            datetime.datetime.utcnow().strftime('%y%M%d%H%M'),
-            state.short
-        ).encode()
 
-        payload = pdu.deliver_sm(
-            self.sequence_number,
-            service_type='',
-            source_addr_ton=original_request['source_addr_ton'],
-            source_addr_npi=original_request['source_addr_npi'],
-            source_addr=original_request['source_addr'],
-            dest_addr_ton=original_request['dest_addr_ton'],
-            dest_addr_npi=original_request['dest_addr_npi'],
-            dest_addr=original_request['dest_addr'],
-            esm_class=int(const.ESMClass.MESSAGE_TYPE_CONTAINS_ACK),
-            protocol_id=0x00,
-            priority_flag=int(const.PriorityFlag.LEVEL_0),
-            schedule_delivery_time=original_request['schedule_delivery_time'],
-            validity_period=original_request['validity_period'],
-            registered_delivery=original_request['registered_delivery'],
-            replace_if_present_flag=original_request['replace_if_present_flag'],
-            data_coding=original_request['replace_if_present_flag'],
-            sm_default_msg_id=0x00,
-            sm_length=len(msg),
-            short_message=msg
-        )
-        # TODO setup timer to catch the resp
-        self.transport.write(payload)
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--address', default='0.0.0.0', help='Address to listen on')
-    parser.add_argument('--port', default=2775, type=int, help='Port to listen on')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose mode')
-
-    args = parser.parse_args()
-
-    log_level = logging.DEBUG if args.verbose else logging.INFO
+def run_server(address: str='0.0.0.0', port: int=2775,
+               smpp_class: Type[RawSMPPServer]=RawSMPPServer,
+               verbose: bool=False):
+    log_level = logging.DEBUG if verbose else logging.INFO
     logger = log.get_stdout_logger('server', log_level)
 
     loop = asyncio.get_event_loop()
-    server_coro = loop.create_server(lambda: SMPPServer(logger=logger), args.address, args.port)
+    server_coro = loop.create_server(lambda: smpp_class(logger=logger), address, port)
     server = loop.run_until_complete(server_coro)
 
     # Serve requests until Ctrl+C is pressed
@@ -226,3 +184,17 @@ if __name__ == '__main__':
     server.close()
     loop.run_until_complete(server.wait_closed())
     loop.close()
+
+
+def get_args() -> Dict[str, Any]:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--address', default='0.0.0.0', help='Address to listen on')
+    parser.add_argument('--port', default=2775, type=int, help='Port to listen on')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose mode')
+
+    args = parser.parse_args()
+    return {'address': args.address, 'port': args.port, 'verbose': args.verbose}
+
+
+if __name__ == '__main__':
+    run_server(**get_args())

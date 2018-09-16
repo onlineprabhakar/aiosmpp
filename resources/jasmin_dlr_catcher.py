@@ -1,11 +1,7 @@
-import argparse
-import binascii
-import datetime
-import math
-import os
-import struct
+"""
+Simple hack server to print out POST vars
+"""
 import sys
-from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from aiohttp import web
 
@@ -15,7 +11,7 @@ class WebHandler(object):
         _app = web.Application()
 
         _app.add_routes((
-            web.post('/dlr', self.handle_dlr)
+            web.post('/dlr', self.handle_dlr),
         ))
 
         return _app

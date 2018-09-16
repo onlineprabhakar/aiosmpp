@@ -107,12 +107,22 @@ connector smppc(testconnector)
 rate 0.00
 ok
 
-persist
 
+httpccm -a
+cid testhttp
+method POST
+url http://172.17.0.1:8080/dlr
+ok
 
-
+morouter -a
+type DefaultRoute
+order 0
+connector http(testhttp)
+ok
 
 smppccm -1 testconnector
+
+persist
 ```
 
 ```bash
