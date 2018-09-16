@@ -2,6 +2,20 @@
 aiosmpp
 =======
 
+.. image:: https://img.shields.io/pypi/v/aiosmpp.svg
+        :target: https://pypi.python.org/pypi/aiosmpp
+
+.. image:: https://img.shields.io/travis/terrycain/aiosmpp.svg
+        :target: https://travis-ci.org/terrycain/aiosmpp
+
+.. image:: https://readthedocs.org/projects/aiosmpp/badge/?version=latest
+        :target: https://aiosmpp.readthedocs.io
+        :alt: Documentation Status
+
+.. image:: https://pyup.io/repos/github/terrycain/aiosmpp/shield.svg
+     :target: https://pyup.io/repos/github/terrycain/aiosmpp/
+     :alt: Updates
+
 Why
 ---
 
