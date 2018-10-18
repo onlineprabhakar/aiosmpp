@@ -9,6 +9,8 @@ class SMPPConfig(object):
 
         self.connectors = {}
 
+        self.mq = {}
+
         self._read_config()
 
     def _read_config(self):
@@ -16,12 +18,22 @@ class SMPPConfig(object):
 
         for section in self._config.sections():
 
-            if section.startswith('mt_route:') or section.startswith('mo_route:') or section.startswith('filter:'):
+            if section.startswith('mt_route:') or section.startswith('mo_route:') or section.startswith('filter:') or section in ('mq',):
                 continue
             elif section.startswith('smpp_bind:'):
                 self._add_connector(section)
             else:
                 print('Unknown section: {0}'.format(section))
+
+        # Get MQ settings
+        self.mq = {
+            'host': self._config.get('mq', 'host', fallback='127.0.0.1'),
+            'port': self._config.getint('mq', 'port', fallback=5672),
+            'vhost': self._config.get('mq', 'vhost', fallback='/'),
+            'user': self._config.get('mq', 'user', fallback='guest'),
+            'password': self._config.get('mq', 'password', fallback='guest'),
+            'heartbeat_interval': self._config.getint('mq', 'heartbeat', fallback=30)
+        }
 
     def _add_connector(self, section):
         name = section.split(':', 1)[-1]

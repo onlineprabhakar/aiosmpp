@@ -11,7 +11,8 @@ with open('README.rst') as readme_file:
 
 requirements = [
     'aiohttp==3.3.2',
-    'python-slugify==1.2.5'
+    'python-slugify==1.2.5',
+    'aioamqp==0.11.0'
 ]
 
 test_requirements = [

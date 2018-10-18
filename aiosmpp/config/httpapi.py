@@ -7,13 +7,15 @@ class HTTPAPIConfig(object):
         self._config = config
         self._reload_func = reload_func
 
-        self.routes = {}
+        self.mt_routes = {}
+        self.mo_routes = {}
         self.filters = {}
 
         self._read_config()
 
     def _read_config(self):
-        self.routes.clear()
+        self.mt_routes.clear()
+        self.mo_routes.clear()
         self.filters.clear()
 
         for section in self._config.sections():
@@ -23,7 +25,7 @@ class HTTPAPIConfig(object):
             elif section.startswith('filter:'):
                 self._add_filter(section)
             elif section.startswith('mt_route:'):
-                self._add_route(section)
+                self._add_mt_route(section)
             else:
                 print('Unknown section: {0}'.format(section))
 
@@ -36,6 +38,11 @@ class HTTPAPIConfig(object):
 
         self.filters[name] = data
 
+    def _add_mt_route(self, section):
+        name, data = self._add_route(section)
+
+        self.mt_routes[name] = data
+
     def _add_route(self, section):
         name = section.split(':', 1)[-1]
         data = dict(self._config[section])
@@ -43,7 +50,7 @@ class HTTPAPIConfig(object):
         if name in self.filters:
             print('Route {0} already exists, overwriting'.format(name))
 
-        self.routes[name] = data
+        return name, data
 
     @classmethod
     def from_file(cls, filepath):

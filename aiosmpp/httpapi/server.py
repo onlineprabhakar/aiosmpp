@@ -1,3 +1,4 @@
+import asyncio
 import argparse
 import binascii
 import datetime
@@ -5,6 +6,7 @@ import math
 import os
 import struct
 import sys
+import uuid
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from aiohttp import web
@@ -13,6 +15,8 @@ from aiosmpp.utils import gsm_encode
 from aiosmpp.constants import AddrTON, AddrNPI, ESMClassMode, ESMClassType, PriorityFlag, RegisteredDeliveryReceipt, ReplaceIfPresentFlag, \
     ESMClassGSMFeatures, MoreMessagesToSend
 from aiosmpp.config.httpapi import HTTPAPIConfig
+from aiosmpp.httpapi.routetable import RouteTable
+from aiosmpp.smppmanager.client import SMPPManagerClient
 
 if TYPE_CHECKING:
     import multidict
@@ -21,6 +25,12 @@ if TYPE_CHECKING:
 class WebHandler(object):
     def __init__(self, config: Optional[HTTPAPIConfig]=None):
         self.config = config
+
+        # TODO find smppmanager
+        self.smpp_manager_client = SMPPManagerClient('localhost:8081')
+        self.smpp_manager_client_loop = asyncio.ensure_future(self.smpp_manager_client.run(interval=120))
+
+        self.route_table = RouteTable(config, connector_dict=self.smpp_manager_client.connectors)
 
         self._last_long_msg_ref_num = 0
         self._long_content_max_parts = 5
@@ -65,7 +75,17 @@ class WebHandler(object):
             web.get('/send', self.handler_send)  # Legacy Jasmin SMPP compatible send
         ))
 
+        _app.on_shutdown.append(self.on_shutdown)
+
         return _app
+
+    async def on_shutdown(self, app):
+        try:
+            self.smpp_manager_client_loop.cancel()
+            await self.smpp_manager_client_loop
+            await self.smpp_manager_client.close()
+        except:
+            pass
 
     def _set_config_params_in_pdu(self, pdu: Dict[str, Any]) -> Dict[str, Any]:
         modified_pdu = pdu.copy()
@@ -75,6 +95,35 @@ class WebHandler(object):
                 modified_pdu[key] = value
 
         return modified_pdu
+
+    def _update_config_params_in_pdu(self, pdu: Dict[str, Any], connector_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Take PDU dict, and update any non locked values
+        """
+
+        config_update_params = [
+            'protocol_id',
+            'replace_if_present_flag',
+            'dest_addr_ton',
+            'source_addr_npi',
+            'dest_addr_npi',
+            'service_type',
+            'source_addr_ton',
+            'sm_default_msg_id',
+        ]
+
+        locked_params = pdu.get('locked', [])
+
+        for param in config_update_params:
+            if param in locked_params:  # Skip locked values
+                continue
+            if param not in connector_config:  # Skip values not in smpp config
+                continue
+
+            for current_pdu in pdu['pdus']:
+                current_pdu[param] = connector_config[param]
+
+        return pdu
 
     def create_submitsm_pdus(self, source_address, destination_address, short_message, data_coding) -> Dict[str, Any]:
         """
@@ -303,10 +352,11 @@ class WebHandler(object):
 
     # Legacy send
     async def handler_send(self, request: web.Request) -> web.Response:
+        request_id = str(uuid.uuid4())
+
         # Parse / Validate form data
         try:
-            form_data = await request.post()
-            request_dict = self.parse_legacy_send_post_parameters(form_data)
+            request_dict = self.parse_legacy_send_post_parameters(request.query)
         except ValueError as err:
             return web.Response(text='Error "{0}"'.format(err), status=400)
 
@@ -331,53 +381,33 @@ class WebHandler(object):
         )
         pdu_event['tags'] = request_dict['tags']
         pdu_event['dlr'] = request_dict['dlr']
+        pdu_event['locked'] = []  # Stores the names of locked attributes so they dont get reset to defaults
 
         print('Num PDUs to send {0}'.format(len(pdu_event['pdus'])))
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        # Evaluate interceptor table
+        # TODO Evaluate interceptor table
+        # TODO Process active intercept
         print()
 
-        # Process active intercept
-        print()
-
-        # Evaluate route table
-        print()
-
-        # Get route status
-        print()
+        connector = self.route_table.evaluate(pdu_event)
+        if connector is None:
+            return web.Response(body='Error "No route found"', status=412)
 
         # Re apply some connector level pdu parameters
+        pdu_event = self._update_config_params_in_pdu(pdu_event, connector.config)
+
+        queue_name = connector.queue_name
+        queue_payload = {
+            'req_id': request_id,
+            'connector': connector.to_dict(),
+            'pdus': pdu_event['pdus'],
+            'dlr': pdu_event['dlr']
+        }
+
+        # TODO Push PDUs onto queue
         print()
 
-        # Push PDUs onto queue
-        print()
+        return web.Response(body='Success "{0}"'.format(request_id))
 
     async def handler_api_v1_send(self, request: web.Request) -> web.Response:
         pass

@@ -21,7 +21,7 @@ class WebHandler(object):
 
         _app.add_routes((
             web.get('/api/v1/status', self.handler_api_v1_status),
-            web.get('/api/v1/smpp/connections', self.handler_api_v1_smpp_connections),
+            web.get('/api/v1/smpp/connectors', self.handler_api_v1_smpp_connectors),
         ))
         _app.on_startup.append(self.startup_tasks)
         _app.on_shutdown.append(self.teardown_tasks)
@@ -36,13 +36,13 @@ class WebHandler(object):
         print('Running SMPP Manager teardown')
         await self.smpp_manager.teardown()
 
-    async def handler_api_v1_smpp_connections(self, request: web.Request) -> web.Response:
-        result = {'connections': {}}
+    async def handler_api_v1_smpp_connectors(self, request: web.Request) -> web.Response:
+        result = {'connectors': {}}
 
         for conn_id, conn_tuple in self.smpp_manager.connectors.items():
             conn, _ = conn_tuple
 
-            result['connections'][conn_id] = {
+            result['connectors'][conn_id] = {
                 'state': conn.state.name,
                 'config': conn.config
             }

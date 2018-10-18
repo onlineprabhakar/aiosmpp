@@ -54,12 +54,13 @@ class RawSMPPServer(asyncio.Protocol):
 
     def connection_made(self, transport):
         peername = transport.get_extra_info('peername')
-        self.logger.info('Connection from {}'.format(peername))
+        self.logger.info('Connection from {0[0]}:{0[1]}'.format(peername))
         self.state = SMPPSessionState.OPEN
         self.transport = transport
 
     def connection_lost(self, exc):
         self.state = SMPPSessionState.CLOSED
+        self.logger.info('Lost connection from {0[0]}:{0[1]}'.format(self.transport.get_extra_info('peername')))
 
     def data_received(self, data: bytes):
         header = pdu.decode_header(data)
