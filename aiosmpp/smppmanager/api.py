@@ -1,6 +1,4 @@
-import argparse
-import os
-import sys
+import logging
 from typing import Optional, TYPE_CHECKING
 
 from aiohttp import web
@@ -12,9 +10,13 @@ if TYPE_CHECKING:
 
 
 class WebHandler(object):
-    def __init__(self, smpp_manager: 'SMPPManager', config: Optional[SMPPConfig]=None):
+    def __init__(self, smpp_manager: 'SMPPManager', config: Optional[SMPPConfig]=None, logger: Optional[logging.Logger]=None):
         self.config = config
         self.smpp_manager = smpp_manager
+
+        self.logger = logger
+        if not logger:
+            self.logger = logging.getLogger()
 
     def app(self) -> web.Application:
         _app = web.Application()
@@ -29,14 +31,16 @@ class WebHandler(object):
         return _app
 
     async def startup_tasks(self, _app):
-        print('Running SMPP Manager setup')
+        self.logger.info('Running SMPP Manager setup')
         await self.smpp_manager.setup()
 
     async def teardown_tasks(self, _app):
-        print('Running SMPP Manager teardown')
+        self.logger.info('Running SMPP Manager teardown')
         await self.smpp_manager.teardown()
 
     async def handler_api_v1_smpp_connectors(self, request: web.Request) -> web.Response:
+        self.logger.info('{0} requesting smpp connector info'.format(request.remote))
+
         result = {'connectors': {}}
 
         for conn_id, conn_tuple in self.smpp_manager.connectors.items():
@@ -50,4 +54,5 @@ class WebHandler(object):
         return web.json_response(result)
 
     async def handler_api_v1_status(self, request: web.Request) -> web.Response:
+        self.logger.info('{0} requesting status'.format(request.remote))
         return web.Response(text='OK', status=200)

@@ -1,6 +1,7 @@
 import asyncio
+import logging
 import datetime
-from typing import Dict, Any, Union
+from typing import Dict, Any, Union, Optional
 
 import aiohttp
 
@@ -9,10 +10,13 @@ import aiohttp
 
 
 class SMPPManagerClient(object):
-    def __init__(self, host, ssl=None, timeout=0.5):
+    def __init__(self, host, ssl=None, timeout=0.5, logger: Optional[logging.Logger]=None):
         self.host = host
         self.ssl = ssl
         self.timeout = timeout
+        self.logger = logger
+        if not logger:
+            self.logger = logging.getLogger()
 
         if ssl:
             self.url = 'https://' + host
@@ -47,7 +51,7 @@ class SMPPManagerClient(object):
         except asyncio.TimeoutError:
             pass
         except Exception as err:
-            print('get connectors err: {0}'.format(err))
+            self.logger.exception('get connectors err', exc_info=err)
 
         return None
 
@@ -56,9 +60,9 @@ class SMPPManagerClient(object):
             try:
                 connector_data = await self.get_connectors()
                 if not connector_data:
-                    print('failed to get connector data')
+                    self.logger.warning('failed to get connector data')
                 else:
-                    print('Updated SMPP connector data')
+                    self.logger.debug('Updated SMPP connector data')
                     self.connectors['connectors'].clear()
                     self.connectors.update(connector_data)
                     self.connectors['last_updated'] = datetime.datetime.now()
@@ -67,5 +71,5 @@ class SMPPManagerClient(object):
             except asyncio.CancelledError:
                 break
             except Exception as err:
-                print('get connectors loop err: {0}'.format(err))
+                self.logger.exception('get connectors loop', exc_info=err)
 

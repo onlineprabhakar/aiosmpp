@@ -2,6 +2,8 @@ import asyncio
 import argparse
 import binascii
 import datetime
+import logging
+import json
 import math
 import os
 import struct
@@ -17,17 +19,23 @@ from aiosmpp.constants import AddrTON, AddrNPI, ESMClassMode, ESMClassType, Prio
 from aiosmpp.config.httpapi import HTTPAPIConfig
 from aiosmpp.httpapi.routetable import RouteTable
 from aiosmpp.smppmanager.client import SMPPManagerClient
+from aiosmpp.log import get_stdout_logger
+import aioamqp
 
 if TYPE_CHECKING:
     import multidict
 
 
 class WebHandler(object):
-    def __init__(self, config: Optional[HTTPAPIConfig]=None):
+    def __init__(self, config: Optional[HTTPAPIConfig]=None, logger: Optional[logging.Logger]=None):
         self.config = config
 
+        self.logger = logger
+        if not logger:
+            self.logger = logging.getLogger()
+
         # TODO find smppmanager
-        self.smpp_manager_client = SMPPManagerClient('localhost:8081')
+        self.smpp_manager_client = SMPPManagerClient('localhost:8081', logger=self.logger)
         self.smpp_manager_client_loop = asyncio.ensure_future(self.smpp_manager_client.run(interval=120))
 
         self.route_table = RouteTable(config, connector_dict=self.smpp_manager_client.connectors)
@@ -55,8 +63,11 @@ class WebHandler(object):
             'sm_default_msg_id': 0,
             # The sm_length parameter is handled by ShortMessageEncoder
             # 'short_message',
-            'locked': []
         }
+
+        self._amqp_transport = None
+        self._amqp_protocol = None
+        self._amqp_channel = None
 
     @property
     def next_long_msg_ref_num(self) -> int:
@@ -75,9 +86,28 @@ class WebHandler(object):
             web.get('/send', self.handler_send)  # Legacy Jasmin SMPP compatible send
         ))
 
+        _app.on_startup.append(self.on_startup)
         _app.on_shutdown.append(self.on_shutdown)
 
         return _app
+
+    async def on_startup(self, app):
+        try:
+            self.logger.info('Attempting to contact MQ')
+            self._amqp_transport, self._amqp_protocol = await aioamqp.connect(
+                host=self.config.mq['host'],
+                port=self.config.mq['port'],
+                login=self.config.mq['user'],
+                password=self.config.mq['password'],
+                virtualhost=self.config.mq['vhost'],
+                ssl=False,
+                heartbeat=self.config.mq['heartbeat_interval']
+            )
+            self.logger.info('Connected to MQ on {0}:{1}'.format(self.config.mq['host'], self.config.mq['port']))
+            self._amqp_channel = await self._amqp_protocol.channel()
+            self.logger.debug('Created MQ channel')
+        except Exception as err:
+            self.logger.exception('Unexpected error when trying to connect to MQ', exc_info=err)
 
     async def on_shutdown(self, app):
         try:
@@ -197,7 +227,7 @@ class WebHandler(object):
                     current_pdu['sar_segment_seqnum'] = sequence_number
                     current_pdu['sar_msg_ref_num'] = msg_ref_num
                 elif self._long_content_split == 'udh':
-                    current_pdu['esm_class'] = (ESMClassMode.DEFAULT, ESMClassType.DEFAULT, (ESMClassGSMFeatures.UDHI_INDICATOR_SET))
+                    current_pdu['esm_class'] = (ESMClassMode.DEFAULT, ESMClassType.DEFAULT, ESMClassGSMFeatures.UDHI_INDICATOR_SET)
 
                     if sequence_number < num_parts:
                         current_pdu['more_messages_to_send'] = MoreMessagesToSend.MORE_MESSAGES
@@ -247,6 +277,16 @@ class WebHandler(object):
         result['direction'] = 'MT'
 
         return result
+
+    def normalise_pdus(self, pdus: Dict[str, Any]):
+        for pdu in pdus['pdus']:
+            new_esm_class = 0
+
+            for esm_part in pdu['esm_class']:
+                new_esm_class |= int(esm_part)
+            pdu['esm_class'] = new_esm_class
+
+
 
     @staticmethod
     def parse_legacy_send_post_parameters(form: 'multidict.MultiDict') -> Dict[str, Any]:
@@ -350,6 +390,15 @@ class WebHandler(object):
 
         return result
 
+    async def publish_pdus_to_queue(self, queue_payload: Dict[str, Any], queue_name: str):
+        payload = json.dumps(queue_payload)
+
+        await self._amqp_channel.basic_publish(
+            payload=payload,
+            exchange_name='',
+            routing_key=queue_name
+        )
+
     # Legacy send
     async def handler_send(self, request: web.Request) -> web.Response:
         request_id = str(uuid.uuid4())
@@ -359,6 +408,8 @@ class WebHandler(object):
             request_dict = self.parse_legacy_send_post_parameters(request.query)
         except ValueError as err:
             return web.Response(text='Error "{0}"'.format(err), status=400)
+
+        self.logger.debug('{0} | Validated POST parameters'.format(request_id))
 
         # Convert MSG into PDUs and split+UDH if necessary, including all default pdu parameters
         # Add a `locked` field so that applying settings later can ignore some pdu fields
@@ -383,30 +434,40 @@ class WebHandler(object):
         pdu_event['dlr'] = request_dict['dlr']
         pdu_event['locked'] = []  # Stores the names of locked attributes so they dont get reset to defaults
 
-        print('Num PDUs to send {0}'.format(len(pdu_event['pdus'])))
+        self.logger.debug('{0} | Num PDUs to send {1}'.format(request_id, len(pdu_event['pdus'])))
 
         # TODO Evaluate interceptor table
         # TODO Process active intercept
-        print()
+        # print()
 
         connector = self.route_table.evaluate(pdu_event)
         if connector is None:
+            self.logger.critical('No route found for {0}'.format(request_id))
             return web.Response(body='Error "No route found"', status=412)
 
         # Re apply some connector level pdu parameters
         pdu_event = self._update_config_params_in_pdu(pdu_event, connector.config)
 
+        # Set DLR params
+        if pdu_event['dlr']:
+            # Set DLR on last PDU
+            pdu_event['pdus'][-1]['registered_delivery'] = RegisteredDeliveryReceipt.SMSC_DELIVERY_RECEIPT_REQUESTED
+
+        # Fixup pdus
+        self.normalise_pdus(pdu_event)
+
         queue_name = connector.queue_name
         queue_payload = {
             'req_id': request_id,
-            'connector': connector.to_dict(),
+            'connector': connector.name,
             'pdus': pdu_event['pdus'],
             'dlr': pdu_event['dlr']
         }
 
-        # TODO Push PDUs onto queue
-        print()
+        self.logger.debug('{0} | Pushing event to queue'.format(request_id))
+        await self.publish_pdus_to_queue(queue_payload, queue_name)
 
+        self.logger.info('{0} | Pushed event to queue'.format(request_id))
         return web.Response(body='Success "{0}"'.format(request_id))
 
     async def handler_api_v1_send(self, request: web.Request) -> web.Response:
@@ -419,13 +480,17 @@ class WebHandler(object):
 def app(argv: list=None) -> web.Application:
     parser = argparse.ArgumentParser(prog='HTTP API')
 
-    # --config.file
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose mode')
     parser.add_argument('--config.file', help='Config file location')
     parser.add_argument('--config.dynamodb.table', help='DynamoDB config table')
     parser.add_argument('--config.dynamodb.region', help='DynamoDB region')
     parser.add_argument('--config.dynamodb.key', help='DynamoDB key identifying the config entry')
 
     args = parser.parse_args(argv[1:])
+
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logger = get_stdout_logger('httpclient', log_level)
+    conf_logger = get_stdout_logger('httpclient.config', log_level)
 
     config = None
     if getattr(args, 'config.file') and getattr(args, 'config.dynamodb.table'):
@@ -439,11 +504,12 @@ def app(argv: list=None) -> web.Application:
             print('Path "{0}" does not exist, exiting'.format(filepath))
             sys.exit(1)
 
-        config = HTTPAPIConfig.from_file(filepath)
+        config = HTTPAPIConfig.from_file(filepath, logger=conf_logger)
 
-    web_server = WebHandler(config=config)
+    web_server = WebHandler(config=config, logger=logger)
     return web_server.app()
 
 
 if __name__ == '__main__':
-    web.run_app(app(sys.argv))
+    print('Running on 0.0.0.0:8080')
+    web.run_app(app(sys.argv), print=lambda x: None)

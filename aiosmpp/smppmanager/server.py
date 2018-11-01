@@ -1,10 +1,12 @@
 import argparse
+import logging
 import os
 import sys
 
 from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.smppmanager.api import WebHandler
 from aiosmpp.smppmanager.manager import SMPPManager
+from aiosmpp.log import get_stdout_logger
 
 from aiohttp import web
 
@@ -12,13 +14,17 @@ from aiohttp import web
 def app(argv: list=None) -> web.Application:
     parser = argparse.ArgumentParser(prog='HTTP API')
 
-    # --config.file
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose mode')
     parser.add_argument('--config.file', help='Config file location')
     parser.add_argument('--config.dynamodb.table', help='DynamoDB config table')
     parser.add_argument('--config.dynamodb.region', help='DynamoDB region')
     parser.add_argument('--config.dynamodb.key', help='DynamoDB key identifying the config entry')
 
     args = parser.parse_args(argv[1:])
+
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    web_logger = get_stdout_logger('smppclient.api', log_level)
+    manager_logger = get_stdout_logger('smppclient', log_level)
 
     config = None
     if getattr(args, 'config.file') and getattr(args, 'config.dynamodb.table'):
@@ -35,9 +41,9 @@ def app(argv: list=None) -> web.Application:
         config = SMPPConfig.from_file(filepath)
 
     print('Initialising SMPP Manager')
-    smpp_manager = SMPPManager(config=config)
+    smpp_manager = SMPPManager(config=config, logger=manager_logger)
     print('Initialising Web API')
-    web_server = WebHandler(smpp_manager=smpp_manager, config=config)
+    web_server = WebHandler(smpp_manager=smpp_manager, config=config, logger=web_logger)
 
     return web_server.app()
 

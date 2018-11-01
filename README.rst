@@ -53,3 +53,13 @@ As this is currently in a pre-alpha like stage, stuff will change at will until 
 weird reason someone than other than me is using this, you've been warned. Other than that, I've probably got some of this wrong, so raise issues.
 
 .. _jasmin: https://github.com/jookies/jasmin
+
+
+
+
+
+
+
+
+
+===================================== TODO TODO FIXME Fails to start if no redis, make nice

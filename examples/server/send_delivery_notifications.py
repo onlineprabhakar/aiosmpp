@@ -14,8 +14,11 @@ class DLRSMPPServer(RawSMPPServer):
 
         submit_time = datetime.datetime.utcnow()
 
-        coro = self.send_dlr(msg_id, request, const.MessageState.DELIVERED, submit_time, delay_time=10)
-        asyncio.ensure_future(coro)
+        # Needs delivery
+        registered_delivery = const.RegisteredDeliveryReceipt(request['registered_delivery'])
+        if registered_delivery in (const.RegisteredDeliveryReceipt.SMSC_DELIVERY_RECEIPT_REQUESTED, const.RegisteredDeliveryReceipt.SMSC_DELIVERY_RECEIPT_REQUESTED_FOR_FAILURE):
+            coro = self.send_dlr(msg_id, request, const.MessageState.DELIVERED, submit_time, delay_time=10)
+            asyncio.ensure_future(coro)
 
         # Return MSG ID, this'll go in the submit sm
         return msg_id

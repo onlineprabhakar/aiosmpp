@@ -1,15 +1,22 @@
 import configparser
-from typing import Callable
+import logging
+from typing import Callable, Optional
 
 
 class HTTPAPIConfig(object):
-    def __init__(self, config: configparser.ConfigParser, reload_func: Callable[[], 'HTTPAPIConfig']):
+    def __init__(self, config: configparser.ConfigParser, reload_func: Callable[[], 'HTTPAPIConfig'], logger: Optional[logging.Logger]=None):
+        self.logger = logger
+        if not logger:
+            self.logger = logging.getLogger()
+
         self._config = config
         self._reload_func = reload_func
 
         self.mt_routes = {}
         self.mo_routes = {}
         self.filters = {}
+
+        self.mq = {}
 
         self._read_config()
 
@@ -18,8 +25,16 @@ class HTTPAPIConfig(object):
         self.mo_routes.clear()
         self.filters.clear()
 
-        for section in self._config.sections():
+        self.mq = {
+            'host': self._config.get('mq', 'host', fallback='127.0.0.1'),
+            'port': self._config.getint('mq', 'port', fallback=5672),
+            'vhost': self._config.get('mq', 'vhost', fallback='/'),
+            'user': self._config.get('mq', 'user', fallback='guest'),
+            'password': self._config.get('mq', 'password', fallback='guest'),
+            'heartbeat_interval': self._config.getint('mq', 'heartbeat', fallback=30)
+        }
 
+        for section in self._config.sections():
             if section.startswith('mo_route:') or section.startswith('smpp_bind:'):
                 continue
             elif section.startswith('filter:'):
@@ -27,14 +42,14 @@ class HTTPAPIConfig(object):
             elif section.startswith('mt_route:'):
                 self._add_mt_route(section)
             else:
-                print('Unknown section: {0}'.format(section))
+                self.logger.warning('Unknown section: {0}'.format(section))
 
     def _add_filter(self, section):
         name = section.split(':', 1)[-1]
         data = dict(self._config[section])
 
         if name in self.filters:
-            print('Filter {0} already exists, overwriting'.format(name))
+            self.logger.warning('Filter {0} already exists, overwriting'.format(name))
 
         self.filters[name] = data
 
@@ -48,16 +63,19 @@ class HTTPAPIConfig(object):
         data = dict(self._config[section])
 
         if name in self.filters:
-            print('Route {0} already exists, overwriting'.format(name))
+            self.logger.warning('Route {0} already exists, overwriting'.format(name))
 
         return name, data
 
     @classmethod
-    def from_file(cls, filepath):
+    def from_file(cls, filepath:  str, logger: Optional[logging.Logger]=None):
+        if not logger:
+            logger = logging.getLogger()
+
         parser = configparser.ConfigParser()
         parser.read(filepath)
 
-        return cls(parser, lambda: cls.from_file(filepath))
+        return cls(parser, lambda: cls.from_file(filepath), logger=logger)
 
     def reload(self):
         new_obj = self._reload_func()

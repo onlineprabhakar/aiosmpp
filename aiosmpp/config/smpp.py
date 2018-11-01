@@ -10,6 +10,7 @@ class SMPPConfig(object):
         self.connectors = {}
 
         self.mq = {}
+        self.redis = {}
 
         self._read_config()
 
@@ -33,6 +34,13 @@ class SMPPConfig(object):
             'user': self._config.get('mq', 'user', fallback='guest'),
             'password': self._config.get('mq', 'password', fallback='guest'),
             'heartbeat_interval': self._config.getint('mq', 'heartbeat', fallback=30)
+        }
+
+        # Get Redis settings
+        self.redis = {
+            'host': self._config.get('redis', 'host', fallback='127.0.0.1'),
+            'port': self._config.getint('redis', 'port', fallback=6379),
+            'db': self._config.getint('redis', 'db', fallback=0),
         }
 
     def _add_connector(self, section):

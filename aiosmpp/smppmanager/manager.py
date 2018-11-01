@@ -1,16 +1,20 @@
 import argparse
 import asyncio
+import logging
+import json
 import os
 import sys
 from typing import Optional, Dict, Tuple, Any
 
+import aioredis
 from slugify import slugify
 
 from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.client import SMPPClientProtocol, SMPPConnectionState
 import aioamqp
 from aioamqp.channel import Channel as AMQPChannel
-
+from aiosmpp.pdu import Status
+from aiosmpp import constants as c
 
 
 def try_format(value, func, default=None, warn_str=None, allow_none=False):
@@ -27,14 +31,19 @@ def try_format(value, func, default=None, warn_str=None, allow_none=False):
 
 
 class SMPPConnector(object):
-    def __init__(self, config: Dict[str, Any], loop: Optional[asyncio.AbstractEventLoop]=None):
+    def __init__(self, config: Dict[str, Any], redis=None, loop: Optional[asyncio.AbstractEventLoop]=None, logger: Optional[logging.Logger]=None):
         self.config = config
         self._smpp_proto: SMPPClientProtocol = None
+
+        self.logger = logger
+        if not logger:
+            self.logger = logging.getLogger()
 
         self._amqp_transport = None
         self._amqp_protocol: aioamqp.AmqpProtocol = None
         self._amqp_channel: AMQPChannel = None
         self._queue_name = config['queue_name']
+        self._redis = redis
 
         self._loop = loop
         if not loop:
@@ -46,6 +55,15 @@ class SMPPConnector(object):
         self.close()
 
     def close(self):
+        self._smpp_close()
+
+        try:
+            if self._amqp_transport:
+                self._amqp_transport.close()
+        except:
+            pass
+
+    def _smpp_close(self):
         try:
             self._smpp_proto.close()
         except Exception:
@@ -54,12 +72,6 @@ class SMPPConnector(object):
         try:
             if self._do_reconnect_future:
                 self._do_reconnect_future.cancel()
-        except:
-            pass
-
-        try:
-            if self._amqp_transport:
-                self._amqp_transport.close()
         except:
             pass
 
@@ -82,8 +94,7 @@ class SMPPConnector(object):
 
     async def _do_queue_connect(self):
         try:
-
-            print('Attempting to contact MQ')
+            self.logger.info('Attempting to contact MQ')
             self._amqp_transport, self._amqp_protocol = await aioamqp.connect(
                 host=self.config['mq']['host'],
                 port=self.config['mq']['port'],
@@ -93,28 +104,115 @@ class SMPPConnector(object):
                 ssl=False,
                 heartbeat=self.config['mq']['heartbeat_interval']
             )
-            print('Connected to MQ on {0}:{1}'.format(self.config['mq']['host'], self.config['mq']['port']))
+            self.logger.info('Connected to MQ on {0}:{1}'.format(self.config['mq']['host'], self.config['mq']['port']))
             self._amqp_channel = await self._amqp_protocol.channel()
-            print('Created MQ channel')
+            self.logger.debug('Created MQ channel')
 
-            # Declare queue
+            # Declare DLR queue
+            await self._amqp_channel.queue_declare(self.config['dlr_queue_name'], durable=True)
+            self.logger.info('Declared MQ queue {0}'.format(self.config['dlr_queue_name']))
+            # Declare MO queue
+            await self._amqp_channel.queue_declare(self.config['mo_queue_name'], durable=True)
+            self.logger.info('Declared MQ queue {0}'.format(self.config['mo_queue_name']))
+            # Declare MT queue
             await self._amqp_channel.queue_declare(self._queue_name, durable=True)
-            print('Declared MQ channel {0}'.format(self._queue_name))
+            self.logger.info('Declared MQ queue {0}'.format(self._queue_name))
             # Setup QOS so we only take 1 msg at a time
             await self._amqp_channel.basic_qos(prefetch_count=1, prefetch_size=0, connection_global=False)
-            print('Set MQ QOS Settings')
+            self.logger.debug('Set MQ QOS Settings')
 
             await self._amqp_channel.basic_consume(self._amqp_callback, queue_name=self._queue_name)
-            print('Set up callback')
+            self.logger.info('Set up MQ callback')
         except Exception as err:
-            print('Unexpected error when trying to connect to MQ: {0}'.format(repr(err)))
+            self.logger.exception('Unexpected error when trying to connect to MQ', exc_info=err)
 
     async def _amqp_callback(self, channel, body, envelope, properties):
-        print(" [x] Received {0}".format(body))
-        await asyncio.sleep(1)
-        print(" [x] Done")
+        try:
+            payload = json.loads(body.decode())
+        except ValueError as err:
+            self.logger.exception('SMPP Event on MQ is not valid json', exc_info=err)
+            return
+        except Exception as err:
+            self.logger.exception('Unknown error occurned during AMQP callback', exc_info=err)
+            return
+
+        req_id = payload.get('req_id', 'UNKNOWN_ID')
+
+        if not payload.get('pdus', []):
+            self.logger.error('{0} | SMPP Event doesnt have any PDUs'.format(req_id))
+            return
+
+        src_addr = payload['pdus'][0]['source_addr']
+        dest_addr = payload['pdus'][0]['destination_addr']
+
+        self.logger.info('{0} | Processing SMPP Request {1} -> {2}'.format(req_id, src_addr, dest_addr))
+
+        try:
+            await self.send_pdus(payload)
+        except Exception as err:
+            self.logger.error('Caught exception whilst sending PDUs {0}'.format(err))
+
         await channel.basic_client_ack(delivery_tag=envelope.delivery_tag)
-        print(" [x] Ackd")
+
+    async def send_pdus(self, event: Dict[str, Any]):
+        # DLR will come on the last PDU
+
+        last_pdu = len(event['pdus']) - 1
+        has_dlr = 'dlr' in event
+
+        for index, pdu in enumerate(event['pdus']):
+            result = await self._smpp_proto.send_submit_sm(timeout=0.5, **pdu)
+
+            if result['status'] != 0:
+                self.logger.warning('Failed to send submit_sm, {0}'.format(result))
+                # TODO DEAL WITH ERROR/FAIL
+                # If DLR put on redis
+
+                break
+
+            else:
+                self.logger.info('Sent submit_sm, message id: {0}'.format(result['payload']['message_id']))
+
+            if has_dlr and index == last_pdu:
+                redis_payload = event['dlr'].copy()
+                redis_payload['id'] = event['req_id']
+                redis_payload = json.dumps(redis_payload)
+                msg_id = result['payload']['message_id']
+
+                try:
+                    await self._redis.set(msg_id, redis_payload, expire=self.config['dlr_expiry'])
+                except Exception as err:
+                    self.logger.exception('Failed to put msgid + dlr info into redis', exc_info=err)
+                else:
+                    # If level 1 or 3, send a DLR when the SMSC accepts message
+                    if event['dlr']['level'] in (1, 3):
+                        try:
+                            text_status = Status(result['status']).name
+                        except Exception as err:
+                            self.logger.critical('Status {0} unknown'.format(result['status']))
+                            text_status = str(result['status'])
+
+                        dlr_payload = {
+                            'id': event['req_id'],
+                            'connector': event['connector'],
+                            'level': event['dlr']['level'],
+                            'method': event['dlr']['method'],
+                            'url': event['dlr']['url'],
+                            'message_status': text_status
+                        }
+
+                        dlr_payload = json.dumps(dlr_payload)
+
+                        try:
+                            await self._amqp_channel.basic_publish(
+                                payload=dlr_payload,
+                                exchange_name='',
+                                routing_key=self.config['dlr_queue_name']
+                            )
+                            self.logger.info('Pushed DLR {0} to queue {1}'.format(event['req_id'], self.config['dlr_queue_name']))
+                        except Exception as err:
+                            self.logger.exception('Failed to publish DLR to queue {0}'.format(self.config['dlr_queue_name']), exc_info=err)
+
 
     async def _do_smpp_reconnect(self):
         try:
@@ -127,27 +225,31 @@ class SMPPConnector(object):
 
     async def _do_smpp_connect_or_retry(self):
         if not self._smpp_proto:
-            self._smpp_proto = None
+            self.logger.info('Connecting to SMPP server on {0}:{1}'.format(self.config['host'], self.config['port']))
+            self._smpp_proto: SMPPClientProtocol = None
+
+            logger_name = '.'.join((self.logger.name, 'client'))
             try:
                 sock, conn = await self._loop.create_connection(
-                    lambda: SMPPClientProtocol(config=self.config, loop=self._loop),
+                    lambda: SMPPClientProtocol(config=self.config, loop=self._loop, logger=logging.getLogger(logger_name)),
                     self.config['host'],
                     self.config['port']
                 )
 
                 self._smpp_proto = conn
                 self._smpp_proto.set_connection_lost_callback(self.connection_lost_trigger)
+                self._smpp_proto.set_deliver_sm_callback(self.deliver_sm_trigger)
 
             except ConnectionRefusedError:
                 self._smpp_proto = None
-                print('Cant connect to {0}:{1}, retrying'.format(self.config['host'], self.config['port']))
+                self.logger.warning('Cant connect to SMPP server {0}:{1}, scheduling retry'.format(self.config['host'], self.config['port']))
 
                 self._do_reconnect_future = asyncio.ensure_future(self._do_smpp_reconnect())
 
         if self._smpp_proto:
             # If proto is not None but is closed, do reconnect
             if self._smpp_proto.state == SMPPConnectionState.CLOSED:
-                print('Connection closed, retrying')
+                self.logger.warning('SMPP connection closed, scheduling retry')
                 try:
                     self._smpp_proto.close()
                 except Exception:
@@ -158,20 +260,36 @@ class SMPPConnector(object):
             # If proto is not None and is connected, do bind
             elif self._smpp_proto.state == SMPPConnectionState.OPEN:
                 if self.config['bind_type'] == 'TX':
+                    self.logger.critical('BIND TX not supported')
                     raise NotImplementedError()
                 elif self.config['bind_type'] == 'RX':
+                    self.logger.critical('BIND RX not supported')
                     raise NotImplementedError()
                 else:  # TRX
+                    self.logger.info('Initiating TRX bind')
                     self._smpp_proto.bind_trx()
 
     def connection_lost_trigger(self):
-        print('Connection closed, retrying')
-        self.close()
+        self.logger.warning('SMPP Connection closed, scheduling retry')
+        self._smpp_close()
         self._do_reconnect_future = asyncio.ensure_future(self._do_smpp_reconnect())
+
+    def deliver_sm_trigger(self, pkt: Dict[str, Any]):
+        self.logger.debug('Got DELIVER_SM')
+        esm_class = c.ESMClass(pkt['payload']['esm_class'])
+
+        if c.ESMClass.MESSAGE_TYPE_CONTAINS_ACK in esm_class or c.ESMClass.MESSAGE_TYPE_CONTAINS_MANUAL_ACK in esm_class:
+            self.logger.debug('Got Delivery notification')
+            # TODO parse DLR text
+        elif c.ESMClass.MESSAGE_TYPE_DEFAULT == esm_class:
+            self.logger.debug('Got SMS-MO')
+            # TODO handle inbound SMS
+        else:
+            self.logger.warning('ESM_CLASS {0} not handled'.format(pkt['payload']['esm_class']))
 
 
 class SMPPManager(object):
-    def __init__(self, config: Optional[SMPPConfig]=None, loop: asyncio.AbstractEventLoop=None):
+    def __init__(self, config: Optional[SMPPConfig]=None, loop: asyncio.AbstractEventLoop=None, logger: Optional[logging.Logger]=None):
         self.loop = loop
         if not loop:
             self.loop = asyncio.get_event_loop()
@@ -180,18 +298,37 @@ class SMPPManager(object):
 
         self.connectors: Dict[str, Tuple[SMPPConnector, asyncio.Future]] = {}
 
+        self.redis = None
+
+        self.logger = logger
+        if not logger:
+            self.logger = logging.getLogger()
+
     async def setup(self):
+        self.logger.info('Creating redis pool')
+        self.redis = await aioredis.create_redis_pool(
+            'redis://{0}:{1}'.format(self.config.redis['host'], self.config.redis['port']),
+            db=self.config.redis['db'], minsize=4, maxsize=12)
+
+        pong = await self.redis.ping()
+        if pong != b'PONG':
+            self.logger.critical('Could not contact redis')
+            raise RuntimeError()
+        self.logger.info('Created redis pool')
+
         # Loop through config
+        self.logger.info('Loading SMPP connector config')
         for connector_id, connector_data in self.config.connectors.items():
             if connector_data.get('disabled', '0') == '1':
-                print('Skipping {0} (disabled)'.format(connector_id))
+                self.logger.info('Skipping {0} (disabled)'.format(connector_id))
             else:
-                print('Adding {0}'.format(connector_id))
+                self.logger.info('Adding {0}'.format(connector_id))
                 await self.add_connector(connector_id, connector_data)
 
-        print('Finished setup')
+        self.logger.info('Finished loading SMPP config')
 
     async def teardown(self):
+        self.logger.info('Tearing down smpp config')
         for conn, future in self.connectors.values():
             try:
                 conn.close()
@@ -199,9 +336,18 @@ class SMPPManager(object):
             except:
                 pass
 
-    async def add_connector(self, name: str, data: Dict[str, str]):
+        try:
+            self.logger.info('Stopping redis pool')
+            self.redis.close()
+            await self.redis.wait_closed()
+        except:
+            pass
 
-        queue_name = 'smpp_' + slugify(name, separator='_')
+    async def add_connector(self, name: str, data: Dict[str, str]):
+        slugified_name = slugify(name, separator='_')
+        queue_name = 'smpp_' + slugified_name
+
+        logger_name = '.'.join((self.logger.name, slugified_name))
 
         smpp_config = {
             'host': data['host'],
@@ -235,6 +381,8 @@ class SMPPManager(object):
             'dlr_expiry': int(data.get('dlr_expiry', '86400')),
             'requeue_delay': int(data.get('requeue_delay', '120')),
             'queue_name': queue_name,
+            'dlr_queue_name': 'dlr',
+            'mo_queue_name': 'mo',
             'mq': self.config.mq
         }
         # Value checking
@@ -242,7 +390,7 @@ class SMPPManager(object):
             print('bind_type ({0}) is not TX, RX, TRX. Setting to TRX'.format(smpp_config['bind_type']))
             smpp_config['bind_type'] = 'TRX'
 
-        conn = SMPPConnector(config=smpp_config)
+        conn = SMPPConnector(config=smpp_config, logger=logging.getLogger(logger_name), redis=self.redis)
         future = asyncio.ensure_future(conn.run())
 
         self.connectors[name] = (conn, future)
