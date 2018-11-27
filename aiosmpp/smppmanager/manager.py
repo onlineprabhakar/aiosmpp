@@ -15,6 +15,7 @@ import aioamqp
 from aioamqp.channel import Channel as AMQPChannel
 from aiosmpp.pdu import Status
 from aiosmpp import constants as c
+from aiosmpp.utils import parse_dlr_text
 
 
 def try_format(value, func, default=None, warn_str=None, allow_none=False):
@@ -213,7 +214,6 @@ class SMPPConnector(object):
                         except Exception as err:
                             self.logger.exception('Failed to publish DLR to queue {0}'.format(self.config['dlr_queue_name']), exc_info=err)
 
-
     async def _do_smpp_reconnect(self):
         try:
             if self.config['conn_loss_retry']:
@@ -280,12 +280,62 @@ class SMPPConnector(object):
 
         if c.ESMClass.MESSAGE_TYPE_CONTAINS_ACK in esm_class or c.ESMClass.MESSAGE_TYPE_CONTAINS_MANUAL_ACK in esm_class:
             self.logger.debug('Got Delivery notification')
-            # TODO parse DLR text
+
+            dlr_data = parse_dlr_text(pkt['payload']['short_message'])
+
+            if not dlr_data:
+                self.logger.warning('Got DLR but couldn\'t parse text {0}'.format(pkt))
+            else:
+                # Run process function async
+                asyncio.ensure_future(self.process_dlr(pkt, dlr_data))
+
         elif c.ESMClass.MESSAGE_TYPE_DEFAULT == esm_class:
             self.logger.debug('Got SMS-MO')
             # TODO handle inbound SMS
         else:
             self.logger.warning('ESM_CLASS {0} not handled'.format(pkt['payload']['esm_class']))
+
+    async def process_dlr(self, pkt: Dict[str, Any], dlr_data: Dict[str, Any]):
+        try:
+            dlr_redis_data = await self._redis.get(dlr_data['id'])
+        except Exception as err:
+            self.logger.exception('Failed to get msgid + dlr info from redis', exc_info=err)
+            return
+
+        if not dlr_redis_data:
+            self.logger.warning('Unknown MSG ID {0}, not found in redis'.format(dlr_data['id']))
+            return
+
+        dlr_redis_data = json.loads(dlr_redis_data)
+
+        dlr_payload = {
+            'id': dlr_redis_data['id'],
+            'id_smsc': dlr_data['id'],
+            'connector': self.config['connector_name'],
+            'level': 3,
+            'method': dlr_redis_data['method'],
+            'url': dlr_redis_data['url'],
+            'message_status': dlr_data['stat'],
+
+            'subdate': dlr_data['sdate'],
+            'donedate': dlr_data['ddate'],
+            'sub': dlr_data['sub'],
+            'dlvrd': dlr_data['dlvrd'],
+            'err': dlr_data['err'],
+            'text': dlr_data['text']
+        }
+
+        dlr_payload = json.dumps(dlr_payload)
+
+        try:
+            await self._amqp_channel.basic_publish(
+                payload=dlr_payload,
+                exchange_name='',
+                routing_key=self.config['dlr_queue_name']
+            )
+            self.logger.info('Pushed DLR {0} to queue {1}'.format(dlr_redis_data['id'], self.config['dlr_queue_name']))
+        except Exception as err:
+            self.logger.exception('Failed to publish DLR to queue {0}'.format(self.config['dlr_queue_name']), exc_info=err)
 
 
 class SMPPManager(object):
@@ -350,6 +400,7 @@ class SMPPManager(object):
         logger_name = '.'.join((self.logger.name, slugified_name))
 
         smpp_config = {
+            'connector_name': slugified_name,
             'host': data['host'],
             'port': int(data['port']),
             'bind_type': data.get('bind_type', 'TRX'),
