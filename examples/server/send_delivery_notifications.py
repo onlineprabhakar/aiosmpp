@@ -17,7 +17,7 @@ class DLRSMPPServer(RawSMPPServer):
         # Needs delivery
         registered_delivery = const.RegisteredDeliveryReceipt(request['registered_delivery'])
         if registered_delivery in (const.RegisteredDeliveryReceipt.SMSC_DELIVERY_RECEIPT_REQUESTED, const.RegisteredDeliveryReceipt.SMSC_DELIVERY_RECEIPT_REQUESTED_FOR_FAILURE):
-            coro = self.send_dlr(msg_id, request, const.MessageState.DELIVERED, submit_time, delay_time=10)
+            coro = self.send_dlr(msg_id, request, const.MessageState.DELIVERED, submit_time, delay_time=5)
             asyncio.ensure_future(coro)
 
         # Return MSG ID, this'll go in the submit sm
@@ -47,7 +47,7 @@ class DLRSMPPServer(RawSMPPServer):
             dest_addr_ton=original_request['dest_addr_ton'],
             dest_addr_npi=original_request['dest_addr_npi'],
             dest_addr=original_request['dest_addr'],
-            esm_class=int(const.ESMClass.MESSAGE_TYPE_CONTAINS_ACK),
+            esm_class=int(const.ESMClassInbound.MESSAGE_TYPE_CONTAINS_DELIVERY_ACK),
             protocol_id=0x00,
             priority_flag=int(const.PriorityFlag.LEVEL_0),
             schedule_delivery_time=original_request['schedule_delivery_time'],
@@ -56,6 +56,44 @@ class DLRSMPPServer(RawSMPPServer):
             replace_if_present_flag=original_request['replace_if_present_flag'],
             data_coding=original_request['replace_if_present_flag'],
             sm_default_msg_id=0x00,
+            sm_length=len(msg),
+            short_message=msg
+        )
+        # TODO setup timer to ensure ESME replies with deliver_sm_resp
+        self.transport.write(payload)
+
+        coro = self.send_mo()
+        # noinspection PyAsyncCall
+        asyncio.ensure_future(coro)
+
+    async def send_mo(self):
+        # Cheap hack to delay DLR for an arbitrary time
+        await asyncio.sleep(5)
+
+        # SMPP Message states ENUM has a short property which converts the longer formats into those which goes in a DLR
+        self.logger.info('Sending MO notification')
+
+        msg = 'Hello'.encode()
+
+        # Create delivery notification, copy most of the values from the submit_sm request
+        payload = pdu.deliver_sm(
+            self.sequence_number,
+            service_type='',
+            source_addr_ton=const.AddrTON.INTERNATIONAL,
+            source_addr_npi=const.AddrNPI.ISDN,
+            source_addr='447111111111',
+            dest_addr_ton=const.AddrTON.INTERNATIONAL,
+            dest_addr_npi=const.AddrNPI.ISDN,
+            dest_addr='447222222222',
+            esm_class=int(const.ESMClassInbound.MESSAGEING_MODE_DEFAULT),
+            protocol_id=0x00,
+            priority_flag=int(const.PriorityFlag.LEVEL_0),
+            schedule_delivery_time=None,  # Always Null
+            validity_period=None,  # Always Null
+            registered_delivery=const.RegisteredDeliveryReceipt.NO_SMSC_DELIVERY_RECEIPT_REQUESTED,
+            replace_if_present_flag=0x00,  # Always Null
+            data_coding=0x00,
+            sm_default_msg_id=0x00,  # Always Null
             sm_length=len(msg),
             short_message=msg
         )

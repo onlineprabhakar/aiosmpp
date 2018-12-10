@@ -1,10 +1,13 @@
 import argparse
 import asyncio
+import base64
 import logging
 import json
+import pickle
 import os
 import sys
-from typing import Optional, Dict, Tuple, Any
+import uuid
+from typing import Optional, Dict, Tuple, Any, List
 
 import aioredis
 from slugify import slugify
@@ -32,7 +35,8 @@ def try_format(value, func, default=None, warn_str=None, allow_none=False):
 
 
 class SMPPConnector(object):
-    def __init__(self, config: Dict[str, Any], redis=None, loop: Optional[asyncio.AbstractEventLoop]=None, logger: Optional[logging.Logger]=None):
+    def __init__(self, config: Dict[str, Any], redis=None, loop: Optional[asyncio.AbstractEventLoop] = None,
+                 logger: Optional[logging.Logger] = None):
         self.config = config
         self._smpp_proto: SMPPClientProtocol = None
 
@@ -276,9 +280,10 @@ class SMPPConnector(object):
 
     def deliver_sm_trigger(self, pkt: Dict[str, Any]):
         self.logger.debug('Got DELIVER_SM')
-        esm_class = c.ESMClass(pkt['payload']['esm_class'])
+        esm_class = c.ESMClassInbound(pkt['payload']['esm_class'])
 
-        if c.ESMClass.MESSAGE_TYPE_CONTAINS_ACK in esm_class or c.ESMClass.MESSAGE_TYPE_CONTAINS_MANUAL_ACK in esm_class:
+        # ESMClassInbound as SMSC is sending us a deliver_sm/data_sm
+        if c.ESMClassInbound.MESSAGE_TYPE_CONTAINS_DELIVERY_ACK in esm_class or c.ESMClassInbound.MESSAGE_TYPE_CONTAINS_MANUAL_ACK in esm_class:
             self.logger.debug('Got Delivery notification')
 
             dlr_data = parse_dlr_text(pkt['payload']['short_message'])
@@ -289,9 +294,9 @@ class SMPPConnector(object):
                 # Run process function async
                 asyncio.ensure_future(self.process_dlr(pkt, dlr_data))
 
-        elif c.ESMClass.MESSAGE_TYPE_DEFAULT == esm_class:
+        elif c.ESMClassInbound.MESSAGE_TYPE_DEFAULT == esm_class:
             self.logger.debug('Got SMS-MO')
-            # TODO handle inbound SMS
+            asyncio.ensure_future(self.process_mo(pkt))
         else:
             self.logger.warning('ESM_CLASS {0} not handled'.format(pkt['payload']['esm_class']))
 
@@ -336,6 +341,132 @@ class SMPPConnector(object):
             self.logger.info('Pushed DLR {0} to queue {1}'.format(dlr_redis_data['id'], self.config['dlr_queue_name']))
         except Exception as err:
             self.logger.exception('Failed to publish DLR to queue {0}'.format(self.config['dlr_queue_name']), exc_info=err)
+
+    async def process_mo(self, pkt: Dict[str, Any]):
+        # TODO check short_message, message_payload for msg
+        message_id = str(uuid.uuid4())
+        message: bytes = pkt['payload']['short_message']
+
+        # https://github.com/jookies/jasmin/blob/1708a9469d327291606dc0896480590392c0b9c0/jasmin/managers/listeners.py#L599
+
+        udhi_indicatior_set = False
+        esm_class = c.ESMClassInbound(pkt['payload']['esm_class'])
+
+        if c.ESMClassInbound.GSM_FEATURES_UDHI in esm_class:
+            udhi_indicatior_set = True
+
+        not_class2 = True
+        data_coding = c.DataCoding(pkt['payload']['data_coding'])
+        if c.DataCoding.GSM_MESSAGE_CONTROL in data_coding:
+            # TODO we need to look at some class 2 stuff here
+            # https://github.com/jookies/jasmin/blob/1708a9469d327291606dc0896480590392c0b9c0/jasmin/managers/listeners.py#L614
+            raise NotImplementedError()
+
+        split_method = None
+        if 'sar_msg_ref_num' in pkt['payload']:
+            split_method = 'sar'
+            total_segments = pkt['payload']['sar_total_segments']
+            segment_seqnum = pkt['payload']['sar_segment_seqnum']
+            msg_ref_num = pkt['payload']['sar_msg_ref_num']
+            self.logger.info('Received multipart SMS-MO using SAR: total {0}, num {1}, ref {2}'.format(total_segments, segment_seqnum, msg_ref_num))
+        elif udhi_indicatior_set and not_class2 and message[:3] == b'\x05\x00\x03':
+            split_method = 'udh'
+            # UDH has some single byte integers in the header, can just index instead of struct
+            total_segments = message[4]
+            segment_seqnum = message[5]
+            msg_ref_num = message[3]
+            message = message[6:]  # Trim off the header
+            self.logger.info('Received multipart SMS-MO using UDH: total {0}, num {1}, ref {2}'.format(total_segments, segment_seqnum, msg_ref_num))
+
+        if not split_method:
+            # We have 1 short sms, non-mulitpart
+
+            mo_payload = {
+                'id': message_id,
+                'to': pkt['payload']['destination_addr'],
+                'from': pkt['payload']['source_addr'],
+                'coding': int(data_coding),
+                'origin-connector': self.config['connector_name'],
+                'msg': base64.b64encode(message).decode()
+            }
+
+            try:
+                await self._amqp_channel.basic_publish(
+                    payload=mo_payload,
+                    exchange_name='',
+                    routing_key=self.config['mo_queue_name']
+                )
+                self.logger.info('Pushed SMS-MO {0} to queue {1}'.format(message_id, self.config['mo_queue_name']))
+            except Exception as err:
+                self.logger.exception('Failed to publish SMS-MO to queue {0}'.format(self.config['mo_queue_name']), exc_info=err)
+        else:
+            # We have 1/N multipart SMS MO, short that in Redis
+            # noinspection PyUnboundLocalVariable
+            sms_part_key = 'long_sms:{0}:{1}:{2}'.format(self.config['connector_name'], msg_ref_num, pkt['payload']['destination_addr'])
+            # noinspection PyUnboundLocalVariable
+            sms_part_fields = {
+                'message_id': message_id,
+                'total_segments': total_segments,
+                'msg_ref_num': msg_ref_num,
+                'segment_seqnum': segment_seqnum,
+                'message': message
+            }
+            sms_part_fields = pickle.dumps(sms_part_fields)
+
+            try:
+                await self._redis.hset(sms_part_key, str(segment_seqnum), sms_part_fields)
+                await self._redis.expire(sms_part_key, 300)
+            except Exception as err:
+                self.logger.exception('Failed to store multipart SMS-MO in redis', exc_info=err)
+                return
+
+            # This will look like
+            # KEY long_sms:conn1:someopaqueref:447428555444
+            # FIELD 1 VALUE pickled_dict
+            # FIELD 2 VALUE pickled_dict
+            # FIELD 3 VALUE pickled_dict
+            # So a hvals of "long_sms:conn1:someopaqueref:447428555444" will return a list of 3 pickled dicts
+
+            if segment_seqnum == total_segments:
+                # https://github.com/jookies/jasmin/blob/1708a9469d327291606dc0896480590392c0b9c0/jasmin/managers/listeners.py#bitbL421
+                # We "should" have a complete set here.
+
+                try:
+                    pickled_data: List[bytes] = await self._redis.hvals(sms_part_key)
+                except Exception as err:
+                    self.logger.exception('Failed to retrieve multipart SMS-MO parts from redis', exc_info=err)
+                    return
+
+                sms_mo_parts = [pickle.loads(item) for item in pickled_data]
+                sms_mo_parts.sort(key=lambda item: item['segment_seqnum'])
+                actual_parts = len(sms_mo_parts)
+
+                if actual_parts != total_segments:
+                    self.logger.error('SMS-MO have received the last multipart segment and am missing parts. '
+                                      'Expected segments {0}, actual {1}, key {2}'.format(total_segments, actual_parts, sms_part_key))
+                    # no point dieing here, might as well try and serve the SMS
+
+                # Concatenate the SMS message parts
+                concatenated_msg = b''.join([item['message'] for item in sms_mo_parts])
+
+                mo_payload = {
+                    'id': message_id,
+                    'to': pkt['payload']['destination_addr'],
+                    'from': pkt['payload']['source_addr'],
+                    'coding': int(data_coding),
+                    'origin-connector': self.config['connector_name'],
+                    'msg': base64.b64encode(concatenated_msg).decode()
+                }
+
+                try:
+                    await self._amqp_channel.basic_publish(
+                        payload=mo_payload,
+                        exchange_name='',
+                        routing_key=self.config['mo_queue_name']
+                    )
+                    self.logger.info('Pushed SMS-MO {0} to queue {1}'.format(message_id, self.config['mo_queue_name']))
+                except Exception as err:
+                    self.logger.exception('Failed to publish SMS-MO to queue {0}'.format(self.config['mo_queue_name']), exc_info=err)
 
 
 class SMPPManager(object):
