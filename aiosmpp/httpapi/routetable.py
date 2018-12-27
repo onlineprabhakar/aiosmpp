@@ -1,4 +1,3 @@
-import json
 import re
 from typing import List, Union, Dict, Any
 
@@ -101,9 +100,9 @@ class SMPPConnector:
 
 
 class Route(object):
-    def __init__(self, order: int, connector_name, filters: List[TransparentFilter]=None, connector_dict=None):
+    def __init__(self, order: int, connector_name, filters: List[TransparentFilter] = None, connector_dict=None):
         if connector_dict is None:
-            connector_dict = {}
+            connector_dict = {'connectors': {}}
 
         self.order = order
         self.connector_name = connector_name  # Contains connector info
@@ -147,6 +146,7 @@ class StaticRoute(Route):
             try:
                 result &= _filter.evaluate(event)
             except Exception as err:
+                # TODO log
                 print(err)
                 result = False
 

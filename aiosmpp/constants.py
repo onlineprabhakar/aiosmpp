@@ -92,10 +92,7 @@ class MessageState(enum.IntEnum):
 
     @property
     def short(self) -> str:
-        try:
-            return MESSAGE_STATE_SHORT[self.name]
-        except KeyError:
-            return 'UNKNOWN'
+        return MESSAGE_STATE_SHORT[self.name]
 
 
 class ESMClass(enum.IntFlag):

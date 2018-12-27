@@ -7,10 +7,10 @@ import pickle
 import os
 import sys
 import uuid
+import warnings
 from typing import Optional, Dict, Tuple, Any, List
 
 import aioredis
-from slugify import slugify
 
 from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.client import SMPPClientProtocol, SMPPConnectionState
@@ -19,6 +19,10 @@ from aioamqp.channel import Channel as AMQPChannel
 from aiosmpp.pdu import Status, TLV
 from aiosmpp import constants as c
 from aiosmpp.utils import parse_dlr_text
+
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    from slugify import slugify
 
 
 def try_format(value, func, default=None, warn_str=None, allow_none=False):

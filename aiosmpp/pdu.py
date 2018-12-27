@@ -102,7 +102,7 @@ TLV_MAP = {
 }
 
 
-def octet_string(value: Optional[bytes], _max: int=0) -> bytes:
+def octet_string(value: Optional[bytes], _max: int = 0) -> bytes:
     if value is None:
         return b'\x00'
 
@@ -112,7 +112,7 @@ def octet_string(value: Optional[bytes], _max: int=0) -> bytes:
     return value
 
 
-def read_octet_string(value: bytes, index: int=0, _max: int=0) -> Tuple[Union[bytes, None], int]:
+def read_octet_string(value: bytes, index: int = 0, _max: int = 0) -> Tuple[Union[bytes, None], int]:
     start = index
 
     payload_len = len(value)
@@ -127,7 +127,7 @@ def read_octet_string(value: bytes, index: int=0, _max: int=0) -> Tuple[Union[by
     return value[start:index], index
 
 
-def c_octet_string(value: Optional[str], _max: int=0) -> bytes:
+def c_octet_string(value: Optional[str], _max: int = 0) -> bytes:
     if value is None:
         return b'\x00'
 
@@ -137,7 +137,7 @@ def c_octet_string(value: Optional[str], _max: int=0) -> bytes:
     return value.encode() + b'\x00'
 
 
-def read_c_octet_string(value: bytes, index: int=0, _max: int=0) -> Tuple[Union[str, None], int]:
+def read_c_octet_string(value: bytes, index: int = 0, _max: int = 0) -> Tuple[Union[str, None], int]:
     start = index
 
     _max += index
@@ -156,51 +156,7 @@ def read_c_octet_string(value: bytes, index: int=0, _max: int=0) -> Tuple[Union[
     return value[start:index-1].decode(), index
 
 
-def read_integer(value: bytes, index: int, octets: int) -> Tuple[int, int]:
-    result = 0
-
-    if octets == 1:
-        result = value[index]
-    if octets == 2:
-        result = struct.unpack_from('>H', value, index)[0]
-    if octets == 4:
-        result = struct.unpack_from('>I', value, index)[0]
-    if octets == 8:
-        result = struct.unpack_from('>Q', value, index)[0]
-
-    return result, index + octets
-
-
-def read_tlv(payload: bytes, index: int=0) -> Tuple[int, bytes, int]:
-    tag, length = struct.unpack_from('>HH', payload, index)
-    index += 4
-    data = payload[index:index+length]
-
-    return tag, data, index + length
-
-
-def read_tlvs(payload: bytes, index: int=0) -> Dict[int, Any]:
-    result = {}
-
-    payload_len = len(payload)
-    while index < payload_len:
-        tag, data, index = read_tlv(payload, index)
-        if tag in TLV_MAP:
-            # tag -> (name, formatter_func)
-            data = TLV_MAP[tag][1](data)
-        result[tag] = data
-
-    return result
-
-
-def create_tlv(tag: int, payload: bytes, length: int=None) -> bytes:
-    if length is None:
-        length = len(payload)
-
-    return struct.pack('>HH', tag, length) + payload
-
-
-def integer(value: Optional[int], octets: int=1) -> bytes:
+def integer(value: Optional[int], octets: int = 1) -> bytes:
     if value is None:
         return b'\x00'
 
@@ -216,7 +172,51 @@ def integer(value: Optional[int], octets: int=1) -> bytes:
     raise AttributeError('octets not one of 1,2,4,8')
 
 
-def create_header(_id: int, status: int, sequence_number: int, payload: Optional[bytes]=None) -> bytes:
+def read_integer(value: bytes, index: int, octets: int) -> Tuple[int, int]:
+    result = 0
+
+    if octets == 1:
+        result = value[index]
+    if octets == 2:
+        result = struct.unpack_from('>H', value, index)[0]
+    if octets == 4:
+        result = struct.unpack_from('>I', value, index)[0]
+    if octets == 8:
+        result = struct.unpack_from('>Q', value, index)[0]
+
+    return result, index + octets
+
+
+def read_tlv(payload: bytes, index: int = 0) -> Tuple[int, bytes, int]:
+    tag, length = struct.unpack_from('>HH', payload, index)
+    index += 4
+    data = payload[index:index+length]
+
+    return tag, data, index + length
+
+
+def read_tlvs(payload: bytes, index: int = 0) -> Dict[int, Any]:
+    result = {}
+
+    payload_len = len(payload)
+    while index < payload_len:
+        tag, data, index = read_tlv(payload, index)
+        if tag in TLV_MAP:
+            # tag -> (name, formatter_func)
+            data = TLV_MAP[tag][1](data)
+        result[tag] = data
+
+    return result
+
+
+def create_tlv(tag: int, payload: bytes, length: int = None) -> bytes:
+    if length is None:
+        length = len(payload)
+
+    return struct.pack('>HH', tag, length) + payload
+
+
+def create_header(_id: int, status: int, sequence_number: int, payload: Optional[bytes] = None) -> bytes:
     if payload is None:
         payload = b''
     packet_length = len(payload) + 16  # 4+4+4+4 for header size

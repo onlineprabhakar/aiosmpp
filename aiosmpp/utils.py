@@ -38,10 +38,7 @@ DLR_PATTERNS = (
 
 def parse_dlr_text(dlr_text: Union[str, bytes]) -> Union[Dict[str, str], None]:
     if isinstance(dlr_text, bytes):
-        try:
-            dlr_text = dlr_text.decode()
-        except Exception as err:
-            return None
+        dlr_text = dlr_text.decode(errors='ignore')
 
     # DLR text is str now.
     # DLR text parsing lifted from https://github.com/jookies/jasmin/blob/master/jasmin/protocols/smpp/operations.py - credit to them
