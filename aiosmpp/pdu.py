@@ -87,8 +87,18 @@ class Status(enum.IntEnum):
     ESME_RUNKNOWNERR = 0x000000FF
 
 
+class TLV(enum.IntEnum):
+    sc_interface_version = 0x0210
+    sar_msg_ref_num = 0x20D
+    sar_total_segments = 0x020E
+    sar_segment_seqnum = 0x020F
+
+
 TLV_MAP = {
-    0x0210: ('sc_interface_version', lambda value: ord(value))  # 5.3.2.25 - e.g. 0x34 -> 3.4
+    TLV.sc_interface_version: ('sc_interface_version', lambda value: ord(value)),  # 5.3.2.25 - e.g. 0x34 -> 3.4
+    TLV.sar_msg_ref_num: ('sar_msg_ref_num', lambda value: read_integer(value, 0, 2)[0]),  # 5.3.2.22
+    TLV.sar_total_segments: ('sar_total_segments', lambda value: read_integer(value, 0, 1)[0]),  # 5.3.2.23
+    TLV.sar_segment_seqnum: ('sar_segment_seqnum', lambda value: read_integer(value, 0, 1)[0]),  # 5.3.2.24
 }
 
 
@@ -152,11 +162,11 @@ def read_integer(value: bytes, index: int, octets: int) -> Tuple[int, int]:
     if octets == 1:
         result = value[index]
     if octets == 2:
-        result = struct.unpack_from('>H', value, index)
+        result = struct.unpack_from('>H', value, index)[0]
     if octets == 4:
-        result = struct.unpack_from('>I', value, index)
+        result = struct.unpack_from('>I', value, index)[0]
     if octets == 8:
-        result = struct.unpack_from('>Q', value, index)
+        result = struct.unpack_from('>Q', value, index)[0]
 
     return result, index + octets
 
@@ -455,7 +465,7 @@ def deliver_sm(sequence_number: int,
                          payload=buffer)
 
 
-def decode_deliver_sm_resp(payload: bytes, index: int=0) -> Dict[str, Any]:
+def decode_deliver_sm(payload: bytes, index: int=0) -> Dict[str, Any]:
     service_type, index = read_c_octet_string(payload, index, _max=6)
     source_addr_ton, index = read_integer(payload, index, octets=1)
     source_addr_npi, index = read_integer(payload, index, octets=1)
@@ -473,7 +483,7 @@ def decode_deliver_sm_resp(payload: bytes, index: int=0) -> Dict[str, Any]:
     data_coding, index = read_integer(payload, index, octets=1)
     sm_default_msg_id, index = read_integer(payload, index, octets=1)
     sm_length, index = read_integer(payload, index, octets=1)
-    short_message, index = read_octet_string(payload, index, _max=254)
+    short_message, index = read_octet_string(payload, index, _max=sm_length)
     tlvs = read_tlvs(payload, index)
 
     return {

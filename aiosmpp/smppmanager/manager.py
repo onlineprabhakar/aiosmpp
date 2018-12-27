@@ -16,7 +16,7 @@ from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.client import SMPPClientProtocol, SMPPConnectionState
 import aioamqp
 from aioamqp.channel import Channel as AMQPChannel
-from aiosmpp.pdu import Status
+from aiosmpp.pdu import Status, TLV
 from aiosmpp import constants as c
 from aiosmpp.utils import parse_dlr_text
 
@@ -363,11 +363,11 @@ class SMPPConnector(object):
             raise NotImplementedError()
 
         split_method = None
-        if 'sar_msg_ref_num' in pkt['payload']:
+        if TLV.sar_msg_ref_num in pkt['payload']['tlvs']:
             split_method = 'sar'
-            total_segments = pkt['payload']['sar_total_segments']
-            segment_seqnum = pkt['payload']['sar_segment_seqnum']
-            msg_ref_num = pkt['payload']['sar_msg_ref_num']
+            total_segments = pkt['payload']['tlvs'][TLV.sar_total_segments]
+            segment_seqnum = pkt['payload']['tlvs'][TLV.sar_segment_seqnum]
+            msg_ref_num = pkt['payload']['tlvs'][TLV.sar_msg_ref_num]
             self.logger.info('Received multipart SMS-MO using SAR: total {0}, num {1}, ref {2}'.format(total_segments, segment_seqnum, msg_ref_num))
         elif udhi_indicatior_set and not_class2 and message[:3] == b'\x05\x00\x03':
             split_method = 'udh'
@@ -383,12 +383,14 @@ class SMPPConnector(object):
 
             mo_payload = {
                 'id': message_id,
-                'to': pkt['payload']['destination_addr'],
+                'to': pkt['payload']['dest_addr'],
                 'from': pkt['payload']['source_addr'],
                 'coding': int(data_coding),
                 'origin-connector': self.config['connector_name'],
                 'msg': base64.b64encode(message).decode()
             }
+
+            mo_payload = json.dumps(mo_payload)
 
             try:
                 await self._amqp_channel.basic_publish(
@@ -402,7 +404,7 @@ class SMPPConnector(object):
         else:
             # We have 1/N multipart SMS MO, short that in Redis
             # noinspection PyUnboundLocalVariable
-            sms_part_key = 'long_sms:{0}:{1}:{2}'.format(self.config['connector_name'], msg_ref_num, pkt['payload']['destination_addr'])
+            sms_part_key = 'long_sms:{0}:{1}:{2}'.format(self.config['connector_name'], msg_ref_num, pkt['payload']['dest_addr'])
             # noinspection PyUnboundLocalVariable
             sms_part_fields = {
                 'message_id': message_id,
@@ -428,9 +430,7 @@ class SMPPConnector(object):
             # So a hvals of "long_sms:conn1:someopaqueref:447428555444" will return a list of 3 pickled dicts
 
             if segment_seqnum == total_segments:
-                # https://github.com/jookies/jasmin/blob/1708a9469d327291606dc0896480590392c0b9c0/jasmin/managers/listeners.py#bitbL421
                 # We "should" have a complete set here.
-
                 try:
                     pickled_data: List[bytes] = await self._redis.hvals(sms_part_key)
                 except Exception as err:
@@ -451,12 +451,14 @@ class SMPPConnector(object):
 
                 mo_payload = {
                     'id': message_id,
-                    'to': pkt['payload']['destination_addr'],
+                    'to': pkt['payload']['dest_addr'],
                     'from': pkt['payload']['source_addr'],
                     'coding': int(data_coding),
                     'origin-connector': self.config['connector_name'],
                     'msg': base64.b64encode(concatenated_msg).decode()
                 }
+
+                mo_payload = json.dumps(mo_payload)
 
                 try:
                     await self._amqp_channel.basic_publish(

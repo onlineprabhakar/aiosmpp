@@ -85,7 +85,7 @@ class DLRSMPPServer(RawSMPPServer):
             dest_addr_ton=const.AddrTON.INTERNATIONAL,
             dest_addr_npi=const.AddrNPI.ISDN,
             dest_addr='447222222222',
-            esm_class=int(const.ESMClassInbound.MESSAGEING_MODE_DEFAULT),
+            esm_class=int(const.ESMClassInbound.MESSAGE_TYPE_DEFAULT),
             protocol_id=0x00,
             priority_flag=int(const.PriorityFlag.LEVEL_0),
             schedule_delivery_time=None,  # Always Null

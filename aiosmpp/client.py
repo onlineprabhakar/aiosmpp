@@ -17,7 +17,7 @@ class SMPPConnectionState(enum.Enum):
 
 
 class SMPPClientProtocol(asyncio.Protocol):
-    def __init__(self, config, loop: Optional[asyncio.AbstractEventLoop]=None, logger: Optional[logging.Logger]=None):
+    def __init__(self, config, loop: Optional[asyncio.AbstractEventLoop] = None, logger: Optional[logging.Logger] = None):
         self.loop = loop
         self.smpp_min_verison = 0x34
         if not loop:
@@ -244,7 +244,7 @@ class SMPPClientProtocol(asyncio.Protocol):
         if pkt['status'] != pdu.Status.ESME_ROK:
             self.logger.critical('DELIVER_SM did not get ESME_ROK status, got: {0}'.format(pkt['status']))
 
-        pkt['payload'] = pdu.decode_deliver_sm_resp(pkt['payload'])
+        pkt['payload'] = pdu.decode_deliver_sm(pkt['payload'])
 
         seq_no = self.get_sequence_number()
         response_pkt = pdu.deliver_sm_resp(seq_no)
