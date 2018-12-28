@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 
 class WebHandler(object):
-    def __init__(self, config: Optional[HTTPAPIConfig]=None, logger: Optional[logging.Logger]=None):
+    def __init__(self, config: Optional[HTTPAPIConfig] = None, logger: Optional[logging.Logger] = None):
         self.config = config
 
         self.logger = logger
@@ -100,7 +100,7 @@ class WebHandler(object):
                 login=self.config.mq['user'],
                 password=self.config.mq['password'],
                 virtualhost=self.config.mq['vhost'],
-                ssl=False,
+                ssl=self.config.mq['ssl'],
                 heartbeat=self.config.mq['heartbeat_interval']
             )
             self.logger.info('Connected to MQ on {0}:{1}'.format(self.config.mq['host'], self.config.mq['port']))
@@ -285,8 +285,6 @@ class WebHandler(object):
             for esm_part in pdu['esm_class']:
                 new_esm_class |= int(esm_part)
             pdu['esm_class'] = new_esm_class
-
-
 
     @staticmethod
     def parse_legacy_send_post_parameters(form: 'multidict.MultiDict') -> Dict[str, Any]:
@@ -477,7 +475,7 @@ class WebHandler(object):
         return web.Response(text='OK', status=200)
 
 
-def app(argv: list=None) -> web.Application:
+def app(argv: list = None) -> web.Application:
     parser = argparse.ArgumentParser(prog='HTTP API')
 
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose mode')

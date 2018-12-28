@@ -163,7 +163,7 @@ class StaticRoute(Route):
 class RouteTable(object):
     def __init__(self, config, route_attr='mt_routes', connector_dict=None):
         if connector_dict is None:
-            connector_dict = {}
+            connector_dict = {'connectors': {}}
 
         self.connector_dict = connector_dict
 
@@ -189,6 +189,7 @@ class RouteTable(object):
         if route_type in ('static', 'default'):
             return StaticRoute(route_index, route_data['connector'], needed_filters, connector_dict=self.connector_dict)
         else:
+            # TODO log
             print('Unknown route type {0}'.format(route_type))
 
         return None
@@ -202,6 +203,7 @@ class RouteTable(object):
                 if route.evaluate(event):
                     return route.connector
             except Exception as err:
+                # TODO log
                 print(err)
         else:
             return None

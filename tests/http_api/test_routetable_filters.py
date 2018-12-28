@@ -77,5 +77,23 @@ def test_tag_filter():
     assert not filter_obj.evaluate(MT_EVENT1)
 
 
-# TODO test get_filter()
+def test_get_filter_transparent():
+    filter_obj = routetable.get_filter({'type': 'transparent'})
+    assert isinstance(filter_obj, routetable.TransparentFilter)
+
+    filter_obj = routetable.get_filter({'type': 'unknown'})
+    assert isinstance(filter_obj, routetable.TransparentFilter)
+
+    filter_obj = routetable.get_filter({})
+    assert isinstance(filter_obj, routetable.TransparentFilter)
+
+
+def test_get_filter_tag():
+    filter_obj = routetable.get_filter({'type': 'tag', 'tag': '1'})
+    assert isinstance(filter_obj, routetable.TagFilter)
+
+
+def test_get_filter_destination_addr():
+    filter_obj = routetable.get_filter({'type': 'destaddr', 'regex': 'test'})
+    assert isinstance(filter_obj, routetable.DestinationAddrFilter)
 

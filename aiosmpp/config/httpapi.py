@@ -4,7 +4,7 @@ from typing import Callable, Optional
 
 
 class HTTPAPIConfig(object):
-    def __init__(self, config: configparser.ConfigParser, reload_func: Callable[[], 'HTTPAPIConfig'], logger: Optional[logging.Logger]=None):
+    def __init__(self, config: configparser.ConfigParser, reload_func: Callable[[], 'HTTPAPIConfig'], logger: Optional[logging.Logger] = None):
         self.logger = logger
         if not logger:
             self.logger = logging.getLogger()
@@ -31,7 +31,8 @@ class HTTPAPIConfig(object):
             'vhost': self._config.get('mq', 'vhost', fallback='/'),
             'user': self._config.get('mq', 'user', fallback='guest'),
             'password': self._config.get('mq', 'password', fallback='guest'),
-            'heartbeat_interval': self._config.getint('mq', 'heartbeat', fallback=30)
+            'heartbeat_interval': self._config.getint('mq', 'heartbeat', fallback=30),
+            'ssl': self._config.getboolean('mq', 'ssl', fallback=False)
         }
 
         for section in self._config.sections():
@@ -68,14 +69,18 @@ class HTTPAPIConfig(object):
         return name, data
 
     @classmethod
-    def from_file(cls, filepath:  str, logger: Optional[logging.Logger]=None):
-        if not logger:
-            logger = logging.getLogger()
-
+    def from_file(cls, filepath: str = None, config: str = None, logger: Optional[logging.Logger] = None):
         parser = configparser.ConfigParser()
-        parser.read(filepath)
+        if filepath:
+            parser.read(filepath)
+            reload_func = lambda: cls.from_file(filepath)
+        elif config:
+            parser.read_string(config)
+            reload_func = lambda: cls.from_file(config=config)
+        else:
+            raise ValueError('filepath or config argument must be provided')
 
-        return cls(parser, lambda: cls.from_file(filepath), logger=logger)
+        return cls(parser, reload_func, logger=logger)
 
     def reload(self):
         new_obj = self._reload_func()
