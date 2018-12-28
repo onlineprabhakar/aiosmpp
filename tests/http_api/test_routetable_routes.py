@@ -93,8 +93,3 @@ def test_static_route_repr():
     result = repr(route)
 
     assert 'StaticRoute' in result
-
-
-
-
-

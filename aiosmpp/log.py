@@ -1,7 +1,8 @@
 import logging
 
 
-def setup_root_aiosmpp_logger(format_string: str = '[%(asctime)23s - %(name)s - %(levelname)8s]  %(message)s', level: int = logging.INFO) -> logging.Logger:
+def setup_root_aiosmpp_logger(format_string: str = '[%(asctime)23s - %(name)s - %(levelname)8s]  %(message)s',
+                              level: int = logging.INFO) -> logging.Logger:
     logger = logging.getLogger('aiosmpp')
     logger.setLevel(level)
 

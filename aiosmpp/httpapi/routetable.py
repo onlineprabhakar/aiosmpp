@@ -183,7 +183,7 @@ class RouteTable(object):
     def _create_route(self, route_index: int, route_data: Dict[str, Any]) -> Union[Route, None]:
         route_type = route_data.get('type', 'static')
 
-        needed_filters = [self.filters.get(filter_name) for filter_name in route_data.get('filters', '').split(',') if filter_name]
+        needed_filters = [self.filters.get(filter_name) for filter_name in route_data.get('filters', '').split(',') if filter_name]  # noqa: E501
         needed_filters = [x for x in needed_filters if x]
 
         if route_type in ('static', 'default'):

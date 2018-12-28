@@ -19,7 +19,8 @@ class SMPPConfig(object):
 
         for section in self._config.sections():
 
-            if section.startswith('mt_route:') or section.startswith('mo_route:') or section.startswith('filter:') or section in ('mq',):
+            if section.startswith('mt_route:') or section.startswith('mo_route:') or \
+                    section.startswith('filter:') or section in ('mq',):
                 continue
             elif section.startswith('smpp_bind:'):
                 self._add_connector(section)

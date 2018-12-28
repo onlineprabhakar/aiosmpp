@@ -10,7 +10,7 @@ import aiohttp
 
 
 class SMPPManagerClient(object):
-    def __init__(self, host, ssl=None, timeout=0.5, logger: Optional[logging.Logger]=None):
+    def __init__(self, host, ssl=None, timeout=0.5, logger: Optional[logging.Logger] = None):
         self.host = host
         self.ssl = ssl
         self.timeout = timeout
@@ -37,7 +37,7 @@ class SMPPManagerClient(object):
     async def close(self):
         try:
             await self.session.close()
-        except:
+        except:  # noqa: E722
             pass
 
     async def get_connectors(self) -> Union[Dict[str, Any], None]:
@@ -55,7 +55,7 @@ class SMPPManagerClient(object):
 
         return None
 
-    async def run(self, interval: int=120):
+    async def run(self, interval: int = 120):
         while True:
             try:
                 connector_data = await self.get_connectors()
@@ -72,4 +72,3 @@ class SMPPManagerClient(object):
                 break
             except Exception as err:
                 self.logger.exception('get connectors loop', exc_info=err)
-

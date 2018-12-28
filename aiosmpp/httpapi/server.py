@@ -14,8 +14,8 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 from aiohttp import web
 
 from aiosmpp.utils import gsm_encode
-from aiosmpp.constants import AddrTON, AddrNPI, ESMClassMode, ESMClassType, PriorityFlag, RegisteredDeliveryReceipt, ReplaceIfPresentFlag, \
-    ESMClassGSMFeatures, MoreMessagesToSend
+from aiosmpp.constants import AddrTON, AddrNPI, ESMClassMode, ESMClassType, PriorityFlag, \
+    RegisteredDeliveryReceipt, ReplaceIfPresentFlag, ESMClassGSMFeatures, MoreMessagesToSend
 from aiosmpp.config.httpapi import HTTPAPIConfig
 from aiosmpp.httpapi.routetable import RouteTable
 from aiosmpp.smppmanager.client import SMPPManagerClient
@@ -114,7 +114,7 @@ class WebHandler(object):
             self.smpp_manager_client_loop.cancel()
             await self.smpp_manager_client_loop
             await self.smpp_manager_client.close()
-        except:
+        except:  # noqa: E722
             pass
 
     def _set_config_params_in_pdu(self, pdu: Dict[str, Any]) -> Dict[str, Any]:
@@ -227,7 +227,8 @@ class WebHandler(object):
                     current_pdu['sar_segment_seqnum'] = sequence_number
                     current_pdu['sar_msg_ref_num'] = msg_ref_num
                 elif self._long_content_split == 'udh':
-                    current_pdu['esm_class'] = (ESMClassMode.DEFAULT, ESMClassType.DEFAULT, ESMClassGSMFeatures.UDHI_INDICATOR_SET)
+                    current_pdu['esm_class'] = (ESMClassMode.DEFAULT, ESMClassType.DEFAULT,
+                                                ESMClassGSMFeatures.UDHI_INDICATOR_SET)
 
                     if sequence_number < num_parts:
                         current_pdu['more_messages_to_send'] = MoreMessagesToSend.MORE_MESSAGES
@@ -325,7 +326,8 @@ class WebHandler(object):
         if 'content' not in form and 'hex-content' not in form:
             raise ValueError('content or hex-content must be provided')
 
-        if 'coding' in form and form.get('coding') not in ('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'):
+        if 'coding' in form and form.get('coding') not in ('0', '1', '2', '3', '4', '5', '6', '7', '8',
+                                                           '9', '10', '11', '12', '13', '14'):
             raise ValueError('coding must be in the range 0-14')
 
         if 'priority' in form and form.get('priority') not in ('0', '1', '2', '3'):

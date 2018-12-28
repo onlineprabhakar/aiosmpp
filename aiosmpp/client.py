@@ -3,7 +3,6 @@ import binascii
 import enum
 import logging
 from typing import Optional, Dict, Any, Callable, Union
-import async_timeout
 
 from aiosmpp import pdu
 
@@ -17,7 +16,8 @@ class SMPPConnectionState(enum.Enum):
 
 
 class SMPPClientProtocol(asyncio.Protocol):
-    def __init__(self, config, loop: Optional[asyncio.AbstractEventLoop] = None, logger: Optional[logging.Logger] = None):
+    def __init__(self, config, loop: Optional[asyncio.AbstractEventLoop] = None,
+                 logger: Optional[logging.Logger] = None):
         self.loop = loop
         self.smpp_min_verison = 0x34
         if not loop:
@@ -60,7 +60,7 @@ class SMPPClientProtocol(asyncio.Protocol):
     def close(self):
         try:
             self._close_session()
-        except:
+        except:  # noqa: E722
             pass
 
     def set_connection_lost_callback(self, func: Callable[[], None]):
@@ -118,7 +118,7 @@ class SMPPClientProtocol(asyncio.Protocol):
         # Trigger callback for connection lost
         self.conn_lost_trigger()
 
-    def bind_trx(self, asyncio_future: Optional[asyncio.Future]=None):
+    def bind_trx(self, asyncio_future: Optional[asyncio.Future] = None):
         seq_no = self.get_sequence_number()
         pkt = pdu.bind_trx(
             sequence_number=seq_no,
@@ -132,7 +132,8 @@ class SMPPClientProtocol(asyncio.Protocol):
         )
 
         self.pending_responses[seq_no] = (
-            asyncio.ensure_future(self.timeout_coro('bind_trx', self.bind_resp_timeout, asyncio_future), loop=self.loop),
+            asyncio.ensure_future(self.timeout_coro('bind_trx', self.bind_resp_timeout, asyncio_future),
+                                  loop=self.loop),
             self.bind_trx_resp,
             asyncio_future
         )
@@ -152,7 +153,8 @@ class SMPPClientProtocol(asyncio.Protocol):
         bind_resp = pdu.decode_bind_trx_resp(pkt['payload'])
 
         if 0x0210 in bind_resp['tlvs'] and bind_resp['tlvs'][0x0210] > self.smpp_min_verison:
-            self.logger.critical('SMPP Server minimum version ({0}) is higher than ours, cant continue'.format(bind_resp['tlvs'][0x0210]))
+            self.logger.critical('SMPP Server minimum version ({0}) is '
+                                 'higher than ours, cant continue'.format(bind_resp['tlvs'][0x0210]))
             self._close_session()
             return
 
@@ -163,7 +165,7 @@ class SMPPClientProtocol(asyncio.Protocol):
 
         return bind_resp
 
-    async def timeout_coro(self, _type, timeout, future: Optional[asyncio.Future]=None):
+    async def timeout_coro(self, _type, timeout, future: Optional[asyncio.Future] = None):
         try:
             await asyncio.sleep(timeout)
             if future:
@@ -186,7 +188,8 @@ class SMPPClientProtocol(asyncio.Protocol):
                     pkt = pdu.enquire_link(seq_no)
 
                     self.pending_responses[seq_no] = (
-                        asyncio.ensure_future(self.timeout_coro('enquire_link_{0}'.format(seq_no), self.enquire_link_timeout), loop=self.loop),
+                        asyncio.ensure_future(self.timeout_coro('enquire_link_{0}'.format(seq_no),
+                                                                self.enquire_link_timeout), loop=self.loop),
                         None,  # Callback to process packet
                         None  # Event to trigger
                     )
@@ -218,7 +221,7 @@ class SMPPClientProtocol(asyncio.Protocol):
         except asyncio.CancelledError:
             pass
 
-    async def send_submit_sm(self, timeout: float=0.5, **kwargs):
+    async def send_submit_sm(self, timeout: float = 0.5, **kwargs):
         """
         :throws asyncio.TimeoutError: When
         """
@@ -254,7 +257,7 @@ class SMPPClientProtocol(asyncio.Protocol):
         if self.deliver_sm_trigger:
             try:
                 self.deliver_sm_trigger(pkt)
-            except:
+            except:  # noqa: E722
                 pass
 
     def submit_sm(self,
@@ -275,7 +278,7 @@ class SMPPClientProtocol(asyncio.Protocol):
                   data_coding: int,
                   sm_default_msg_id,
                   short_message: Union[bytes, str],
-                  asyncio_future: Optional[asyncio.Future]=None):
+                  asyncio_future: Optional[asyncio.Future] = None):
         seq_no = self.get_sequence_number()
 
         sm_length = len(short_message)
@@ -305,7 +308,10 @@ class SMPPClientProtocol(asyncio.Protocol):
         )
 
         self.pending_responses[seq_no] = (
-            asyncio.ensure_future(self.timeout_coro('submit_sm', self.submit_sm_resp_timeout, asyncio_future), loop=self.loop),
+            asyncio.ensure_future(
+                self.timeout_coro('submit_sm', self.submit_sm_resp_timeout, asyncio_future),
+                loop=self.loop
+            ),
             self.submit_sm_resp,
             asyncio_future
         )
@@ -323,6 +329,8 @@ class SMPPClientProtocol(asyncio.Protocol):
         try:
             pkt['payload'] = pdu.decode_submit_sm_resp(pkt['payload'])
         except Exception as err:
-            self.logger.exception('Failed to decode submit_sm_resp, payload: {0}'.format(binascii.hexlify(pkt['payload'])), exc_info=err)
+            self.logger.exception('Failed to decode submit_sm_resp, payload: {0}'.format(
+                binascii.hexlify(pkt['payload'])), exc_info=err
+            )
 
         return pkt

@@ -30,7 +30,8 @@ def test_gsm_7_strip():
 
 
 def test_dlr_status_decode():
-    payload = b'id:7220bb6bd0be98fa628de66590f80070 sub:001 dlvrd:001 submit date:0610190851 done date:0610190951 stat:DELIVRD err:000 text:'
+    payload = b'id:7220bb6bd0be98fa628de66590f80070 sub:001 dlvrd:001 submit date:0610190851' \
+              b' done date:0610190951 stat:DELIVRD err:000 text:'
 
     result = utils.parse_dlr_text(payload)
 

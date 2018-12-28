@@ -96,4 +96,3 @@ def test_get_filter_tag():
 def test_get_filter_destination_addr():
     filter_obj = routetable.get_filter({'type': 'destaddr', 'regex': 'test'})
     assert isinstance(filter_obj, routetable.DestinationAddrFilter)
-

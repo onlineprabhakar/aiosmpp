@@ -4,7 +4,8 @@ from typing import Callable, Optional
 
 
 class HTTPAPIConfig(object):
-    def __init__(self, config: configparser.ConfigParser, reload_func: Callable[[], 'HTTPAPIConfig'], logger: Optional[logging.Logger] = None):
+    def __init__(self, config: configparser.ConfigParser, reload_func: Callable[[], 'HTTPAPIConfig'],
+                 logger: Optional[logging.Logger] = None):
         self.logger = logger
         if not logger:
             self.logger = logging.getLogger()
@@ -73,10 +74,10 @@ class HTTPAPIConfig(object):
         parser = configparser.ConfigParser()
         if filepath:
             parser.read(filepath)
-            reload_func = lambda: cls.from_file(filepath)
+            reload_func = lambda: cls.from_file(filepath)  # noqa: E731
         elif config:
             parser.read_string(config)
-            reload_func = lambda: cls.from_file(config=config)
+            reload_func = lambda: cls.from_file(config=config)  # noqa: E731
         else:
             raise ValueError('filepath or config argument must be provided')
 

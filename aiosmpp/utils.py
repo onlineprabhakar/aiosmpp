@@ -7,7 +7,7 @@ GSM_CHARS_EXT = ("````````````````````^```````````````````{}`````\\````````````[
                  "|````````````````````````````````````€``````````````````````````")
 
 
-def gsm_encode(plaintext: str) -> str:
+def gsm_encode(plaintext: str) -> str:  # noqa: E501
     """Will encode plaintext to gsm 338
     Taken from
     http://stackoverflow.com/questions/2452861/python-library-for-converting-plain-text-ascii-into-gsm-7-bit-character-set
@@ -41,7 +41,8 @@ def parse_dlr_text(dlr_text: Union[str, bytes]) -> Union[Dict[str, str], None]:
         dlr_text = dlr_text.decode(errors='ignore')
 
     # DLR text is str now.
-    # DLR text parsing lifted from https://github.com/jookies/jasmin/blob/master/jasmin/protocols/smpp/operations.py - credit to them
+    # DLR text parsing lifted from
+    # https://github.com/jookies/jasmin/blob/master/jasmin/protocols/smpp/operations.py - credit to them
 
     # DLR Format
     # Example of DLR content
@@ -60,7 +61,8 @@ def parse_dlr_text(dlr_text: Union[str, bytes]) -> Union[Dict[str, str], None]:
         if match:
             key = list(match.groupdict().keys())[0]
             # Update id and stat only once
-            if key not in ('id', 'stat') or (key == 'id' and 'id' not in result) or (key == 'stat' and 'stat' not in result):
+            if key not in ('id', 'stat') or (key == 'id' and 'id' not in result) or \
+                    (key == 'stat' and 'stat' not in result):
                 result.update(match.groupdict())
 
     # Only return result if we have decent details

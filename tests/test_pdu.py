@@ -23,7 +23,8 @@ def test_read_octet_string_none():
     assert index == 1
 
 
-@pytest.mark.parametrize('value,index,max_length,expected_value,expected_index', ((b'test1234', 0, 4, b'test', 4), (b'test1234', 2, 4, b'st12', 6)))
+@pytest.mark.parametrize('value,index,max_length,expected_value,expected_index',
+                         ((b'test1234', 0, 4, b'test', 4), (b'test1234', 2, 4, b'st12', 6)))
 def test_read_octet_string(value, index, max_length, expected_value, expected_index):
     result, new_index = pdu.read_octet_string(value=value, index=index, _max=max_length)
 
@@ -51,7 +52,8 @@ def test_read_c_octet_string_none():
     assert index == 1
 
 
-@pytest.mark.parametrize('value,index,max_length,expected_value,expected_index', ((b'tes\x001234', 0, 4, 'tes', 4), (b'test1\x0034', 2, 4, 'st1', 6)))
+@pytest.mark.parametrize('value,index,max_length,expected_value,expected_index',
+                         ((b'tes\x001234', 0, 4, 'tes', 4), (b'test1\x0034', 2, 4, 'st1', 6)))
 def test_read_c_octet_string(value, index, max_length, expected_value, expected_index):
     result, new_index = pdu.read_c_octet_string(value=value, index=index, _max=max_length)
 

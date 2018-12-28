@@ -16,19 +16,24 @@ class DLRSMPPServer(RawSMPPServer):
 
         # Needs delivery
         registered_delivery = const.RegisteredDeliveryReceipt(request['registered_delivery'])
-        if registered_delivery in (const.RegisteredDeliveryReceipt.SMSC_DELIVERY_RECEIPT_REQUESTED, const.RegisteredDeliveryReceipt.SMSC_DELIVERY_RECEIPT_REQUESTED_FOR_FAILURE):
+        if registered_delivery in (const.RegisteredDeliveryReceipt.SMSC_DELIVERY_RECEIPT_REQUESTED,
+                                   const.RegisteredDeliveryReceipt.SMSC_DELIVERY_RECEIPT_REQUESTED_FOR_FAILURE):
             coro = self.send_dlr(msg_id, request, const.MessageState.DELIVERED, submit_time, delay_time=5)
             asyncio.ensure_future(coro)
 
         # Return MSG ID, this'll go in the submit sm
         return msg_id
 
-    async def send_dlr(self, msg_id: str, original_request: Dict[str, Any], state: const.MessageState, submit_time: datetime.datetime, delay_time: int=10):
+    async def send_dlr(self, msg_id: str, original_request: Dict[str, Any], state: const.MessageState,
+                       submit_time: datetime.datetime, delay_time: int = 10):
         # Cheap hack to delay DLR for an arbitrary time
         await asyncio.sleep(delay_time)
 
-        # SMPP Message states ENUM has a short property which converts the longer formats into those which goes in a DLR
-        self.logger.info('Sending {0} notification for {1} -> {2}'.format(state.short, original_request['source_addr'], original_request['dest_addr']))
+        # SMPP Message states ENUM has a short property which converts the
+        # longer formats into those which goes in a DLR
+        self.logger.info('Sending {0} notification for {1} -> {2}'.format(
+            state.short, original_request['source_addr'], original_request['dest_addr'])
+        )
         # Format of the message is in SMPP Spec v3.4 Appendix B DLR Format, page ~167
         msg = 'id:{0} sub:001 dlvrd:001 submit date:{1} done date:{2} stat:{3} err:000 text:'.format(
             msg_id,

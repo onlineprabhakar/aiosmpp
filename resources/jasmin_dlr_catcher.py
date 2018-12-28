@@ -22,13 +22,13 @@ class WebHandler(object):
         try:
             form_data = await request.post()
             print(form_data)
-        except Exception as err:
+        except Exception:
             pass
 
         return web.Response(text='ACK/Jasmin', status=200)
 
 
-def app(argv: list=None) -> web.Application:
+def app(argv: list = None) -> web.Application:
     return WebHandler().app()
 
 

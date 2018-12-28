@@ -69,7 +69,7 @@ class SMPPConnector(object):
         try:
             if self._amqp_transport:
                 self._amqp_transport.close()
-        except:
+        except:  # noqa: E722
             pass
 
     def _smpp_close(self):
@@ -81,7 +81,7 @@ class SMPPConnector(object):
         try:
             if self._do_reconnect_future:
                 self._do_reconnect_future.cancel()
-        except:
+        except:  # noqa: E722
             pass
 
     @property
@@ -197,7 +197,7 @@ class SMPPConnector(object):
                     if event['dlr']['level'] in (1, 3):
                         try:
                             text_status = Status(result['status']).name
-                        except Exception as err:
+                        except Exception:
                             self.logger.critical('Status {0} unknown'.format(result['status']))
                             text_status = str(result['status'])
 
@@ -218,9 +218,11 @@ class SMPPConnector(object):
                                 exchange_name='',
                                 routing_key=self.config['dlr_queue_name']
                             )
-                            self.logger.info('Pushed DLR {0} to queue {1}'.format(event['req_id'], self.config['dlr_queue_name']))
+                            self.logger.info('Pushed DLR {0} to queue {1}'.format(event['req_id'],
+                                                                                  self.config['dlr_queue_name']))
                         except Exception as err:
-                            self.logger.exception('Failed to publish DLR to queue {0}'.format(self.config['dlr_queue_name']), exc_info=err)
+                            self.logger.exception('Failed to publish DLR to queue {0}'.format(
+                                self.config['dlr_queue_name']), exc_info=err)
 
     async def _do_smpp_reconnect(self):
         try:
@@ -239,7 +241,8 @@ class SMPPConnector(object):
             logger_name = '.'.join((self.logger.name, 'client'))
             try:
                 sock, conn = await self._loop.create_connection(
-                    lambda: SMPPClientProtocol(config=self.config, loop=self._loop, logger=logging.getLogger(logger_name)),
+                    lambda: SMPPClientProtocol(config=self.config, loop=self._loop,
+                                               logger=logging.getLogger(logger_name)),
                     self.config['host'],
                     self.config['port']
                 )
@@ -250,7 +253,8 @@ class SMPPConnector(object):
 
             except ConnectionRefusedError:
                 self._smpp_proto = None
-                self.logger.warning('Cant connect to SMPP server {0}:{1}, scheduling retry'.format(self.config['host'], self.config['port']))
+                self.logger.warning('Cant connect to SMPP server {0}:{1}, scheduling retry'.format(
+                    self.config['host'], self.config['port']))
 
                 self._do_reconnect_future = asyncio.ensure_future(self._do_smpp_reconnect())
 
@@ -287,7 +291,8 @@ class SMPPConnector(object):
         esm_class = c.ESMClassInbound(pkt['payload']['esm_class'])
 
         # ESMClassInbound as SMSC is sending us a deliver_sm/data_sm
-        if c.ESMClassInbound.MESSAGE_TYPE_CONTAINS_DELIVERY_ACK in esm_class or c.ESMClassInbound.MESSAGE_TYPE_CONTAINS_MANUAL_ACK in esm_class:
+        if c.ESMClassInbound.MESSAGE_TYPE_CONTAINS_DELIVERY_ACK in esm_class or \
+                c.ESMClassInbound.MESSAGE_TYPE_CONTAINS_MANUAL_ACK in esm_class:
             self.logger.debug('Got Delivery notification')
 
             dlr_data = parse_dlr_text(pkt['payload']['short_message'])
@@ -344,7 +349,8 @@ class SMPPConnector(object):
             )
             self.logger.info('Pushed DLR {0} to queue {1}'.format(dlr_redis_data['id'], self.config['dlr_queue_name']))
         except Exception as err:
-            self.logger.exception('Failed to publish DLR to queue {0}'.format(self.config['dlr_queue_name']), exc_info=err)
+            self.logger.exception('Failed to publish DLR to queue {0}'.format(
+                self.config['dlr_queue_name']), exc_info=err)
 
     async def process_mo(self, pkt: Dict[str, Any]):
         # TODO check short_message, message_payload for msg
@@ -372,7 +378,9 @@ class SMPPConnector(object):
             total_segments = pkt['payload']['tlvs'][TLV.sar_total_segments]
             segment_seqnum = pkt['payload']['tlvs'][TLV.sar_segment_seqnum]
             msg_ref_num = pkt['payload']['tlvs'][TLV.sar_msg_ref_num]
-            self.logger.info('Received multipart SMS-MO using SAR: total {0}, num {1}, ref {2}'.format(total_segments, segment_seqnum, msg_ref_num))
+            self.logger.info('Received multipart SMS-MO using SAR: total {0}, num {1}, ref {2}'.format(
+                total_segments, segment_seqnum, msg_ref_num))
+
         elif udhi_indicatior_set and not_class2 and message[:3] == b'\x05\x00\x03':
             split_method = 'udh'
             # UDH has some single byte integers in the header, can just index instead of struct
@@ -380,7 +388,8 @@ class SMPPConnector(object):
             segment_seqnum = message[5]
             msg_ref_num = message[3]
             message = message[6:]  # Trim off the header
-            self.logger.info('Received multipart SMS-MO using UDH: total {0}, num {1}, ref {2}'.format(total_segments, segment_seqnum, msg_ref_num))
+            self.logger.info('Received multipart SMS-MO using UDH: total {0}, num {1}, ref {2}'.format(
+                total_segments, segment_seqnum, msg_ref_num))
 
         if not split_method:
             # We have 1 short sms, non-mulitpart
@@ -404,11 +413,15 @@ class SMPPConnector(object):
                 )
                 self.logger.info('Pushed SMS-MO {0} to queue {1}'.format(message_id, self.config['mo_queue_name']))
             except Exception as err:
-                self.logger.exception('Failed to publish SMS-MO to queue {0}'.format(self.config['mo_queue_name']), exc_info=err)
+                self.logger.exception('Failed to publish SMS-MO to queue {0}'.format(
+                    self.config['mo_queue_name']), exc_info=err
+                )
         else:
             # We have 1/N multipart SMS MO, short that in Redis
             # noinspection PyUnboundLocalVariable
-            sms_part_key = 'long_sms:{0}:{1}:{2}'.format(self.config['connector_name'], msg_ref_num, pkt['payload']['dest_addr'])
+            sms_part_key = 'long_sms:{0}:{1}:{2}'.format(
+                self.config['connector_name'], msg_ref_num, pkt['payload']['dest_addr'])
+
             # noinspection PyUnboundLocalVariable
             sms_part_fields = {
                 'message_id': message_id,
@@ -447,7 +460,8 @@ class SMPPConnector(object):
 
                 if actual_parts != total_segments:
                     self.logger.error('SMS-MO have received the last multipart segment and am missing parts. '
-                                      'Expected segments {0}, actual {1}, key {2}'.format(total_segments, actual_parts, sms_part_key))
+                                      'Expected segments {0}, actual {1}, key {2}'.format(
+                                          total_segments, actual_parts, sms_part_key))
                     # no point dieing here, might as well try and serve the SMS
 
                 # Concatenate the SMS message parts
@@ -472,11 +486,14 @@ class SMPPConnector(object):
                     )
                     self.logger.info('Pushed SMS-MO {0} to queue {1}'.format(message_id, self.config['mo_queue_name']))
                 except Exception as err:
-                    self.logger.exception('Failed to publish SMS-MO to queue {0}'.format(self.config['mo_queue_name']), exc_info=err)
+                    self.logger.exception('Failed to publish SMS-MO to queue {0}'.format(
+                        self.config['mo_queue_name']), exc_info=err
+                    )
 
 
 class SMPPManager(object):
-    def __init__(self, config: Optional[SMPPConfig]=None, loop: asyncio.AbstractEventLoop=None, logger: Optional[logging.Logger]=None):
+    def __init__(self, config: Optional[SMPPConfig] = None, loop: asyncio.AbstractEventLoop = None,
+                 logger: Optional[logging.Logger] = None):
         self.loop = loop
         if not loop:
             self.loop = asyncio.get_event_loop()
@@ -520,14 +537,14 @@ class SMPPManager(object):
             try:
                 conn.close()
                 future.cancel()
-            except:
+            except:  # noqa: E722
                 pass
 
         try:
             self.logger.info('Stopping redis pool')
             self.redis.close()
             await self.redis.wait_closed()
-        except:
+        except:  # noqa: E722
             pass
 
     async def add_connector(self, name: str, data: Dict[str, str]):
@@ -551,8 +568,10 @@ class SMPPManager(object):
             'coding': int(data.get('coding', '1')),
             'enquire_link_interval': int(data.get('enquire_link_interval', '30')),
             'replace_if_present_flag': int(data.get('replace_if_present_flag', '0')),
-            'protocol_id': try_format(data.get('proto_id'), int, warn_str='proto_id must be an integer not {0}', allow_none=True),
-            'validity_period': try_format(data.get('validity'), int, warn_str='validity must be an integer not {0}', allow_none=True),
+            'protocol_id': try_format(data.get('proto_id'), int,
+                                      warn_str='proto_id must be an integer not {0}', allow_none=True),
+            'validity_period': try_format(data.get('validity'), int,
+                                          warn_str='validity must be an integer not {0}', allow_none=True),
             'service_type': data.get('systype'),
             'addr_range': data.get('addr_range'),
             # Type of number / numbering plan identification,
@@ -615,9 +634,7 @@ async def main():
     smpp_mgmr = SMPPManager(config=config)
     await smpp_mgmr.setup()
 
-
     await asyncio.sleep(120)
 
 if __name__ == '__main__':
     asyncio.get_event_loop().run_until_complete(main())
-

@@ -131,7 +131,7 @@ def c_octet_string(value: Optional[str], _max: int = 0) -> bytes:
     if value is None:
         return b'\x00'
 
-    if _max > 0 and len(value) > _max -1:
+    if _max > 0 and len(value) > _max - 1:
         value = value[:_max-1]
 
     return value.encode() + b'\x00'
@@ -253,11 +253,11 @@ def enquire_link_resp(sequence_number: int) -> bytes:
 def bind_trx(sequence_number: int,
              system_id: str,
              password: str,
-             system_type: Optional[str]=None,
-             interface_version: int=0x34,
-             addr_ton: Optional[int]=None,
-             addr_npi: Optional[int]=None,
-             address_range: Optional[str]=None) -> bytes:
+             system_type: Optional[str] = None,
+             interface_version: int = 0x34,
+             addr_ton: Optional[int] = None,
+             addr_npi: Optional[int] = None,
+             address_range: Optional[str] = None) -> bytes:
 
     buffer = c_octet_string(system_id, _max=16)
     buffer += c_octet_string(password, _max=9)
@@ -273,7 +273,7 @@ def bind_trx(sequence_number: int,
                          payload=buffer)
 
 
-def decode_bind_trx(payload: bytes, index: int=0) -> Dict[str, Any]:
+def decode_bind_trx(payload: bytes, index: int = 0) -> Dict[str, Any]:
     system_id, index = read_c_octet_string(payload, index, _max=16)
     password, index = read_c_octet_string(payload, index, _max=9)
     system_type, index = read_c_octet_string(payload, index, _max=16)
@@ -295,7 +295,7 @@ def decode_bind_trx(payload: bytes, index: int=0) -> Dict[str, Any]:
 
 def bind_trx_resp(sequence_number: int,
                   system_id: str,
-                  interface_version: int=0x34) -> bytes:
+                  interface_version: int = 0x34) -> bytes:
 
     buffer = c_octet_string(system_id, _max=16)
     buffer += create_tlv(tag=0x0210, payload=bytes([interface_version]))
@@ -306,7 +306,7 @@ def bind_trx_resp(sequence_number: int,
                          payload=buffer)
 
 
-def decode_bind_trx_resp(payload: bytes, index: int=0) -> Dict[str, Any]:
+def decode_bind_trx_resp(payload: bytes, index: int = 0) -> Dict[str, Any]:
     system_id, index = read_c_octet_string(payload, index, _max=16)
     tlvs = read_tlvs(payload, index)
 
@@ -318,9 +318,9 @@ def decode_bind_trx_resp(payload: bytes, index: int=0) -> Dict[str, Any]:
 
 # Submit SM
 def submit_sm(sequence_number: int, service_type: str, source_addr_ton: int, source_addr_npi: int, source_addr: str,
-              dest_addr_ton: int, dest_addr_npi: int, destination_addr: str, esm_class: int, protocol_id: int, priority_flag: int,
-              schedule_delivery_time: str, validity_period: str, registered_delivery: int, replace_if_present_flag: int, data_coding: int,
-              sm_default_msg_id, sm_length, short_message) -> bytes:
+              dest_addr_ton: int, dest_addr_npi: int, destination_addr: str, esm_class: int, protocol_id: int,
+              priority_flag: int, schedule_delivery_time: str, validity_period: str, registered_delivery: int,
+              replace_if_present_flag: int, data_coding: int, sm_default_msg_id, sm_length, short_message) -> bytes:
 
     buffer = c_octet_string(service_type, _max=6)
     buffer += integer(source_addr_ton, octets=1)
@@ -347,7 +347,7 @@ def submit_sm(sequence_number: int, service_type: str, source_addr_ton: int, sou
                          payload=buffer)
 
 
-def decode_submit_sm(payload: bytes, index: int=0) -> Dict[str, Any]:
+def decode_submit_sm(payload: bytes, index: int = 0) -> Dict[str, Any]:
     service_type, index = read_c_octet_string(payload, index, _max=6)
     source_addr_ton, index = read_integer(payload, index, octets=1)
     source_addr_npi, index = read_integer(payload, index, octets=1)
@@ -404,7 +404,7 @@ def submit_sm_resp(sequence_number: int, msg_id: str, status=Status.ESME_ROK) ->
                          payload=buffer)
 
 
-def decode_submit_sm_resp(payload: bytes, index: int=0) -> Dict[str, Any]:
+def decode_submit_sm_resp(payload: bytes, index: int = 0) -> Dict[str, Any]:
     message_id, index = read_c_octet_string(payload, index, _max=65)
     tlvs = read_tlvs(payload, index)
 
@@ -434,7 +434,7 @@ def deliver_sm(sequence_number: int,
                sm_default_msg_id: int,
                sm_length: int,
                short_message: bytes,
-               tlvs: Optional[List[bytes]]=None) -> bytes:
+               tlvs: Optional[List[bytes]] = None) -> bytes:
 
     buffer = c_octet_string(service_type, _max=6)
     buffer += integer(source_addr_ton, octets=1)
@@ -465,7 +465,7 @@ def deliver_sm(sequence_number: int,
                          payload=buffer)
 
 
-def decode_deliver_sm(payload: bytes, index: int=0) -> Dict[str, Any]:
+def decode_deliver_sm(payload: bytes, index: int = 0) -> Dict[str, Any]:
     service_type, index = read_c_octet_string(payload, index, _max=6)
     source_addr_ton, index = read_integer(payload, index, octets=1)
     source_addr_npi, index = read_integer(payload, index, octets=1)

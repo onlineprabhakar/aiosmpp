@@ -10,7 +10,8 @@ if TYPE_CHECKING:
 
 
 class WebHandler(object):
-    def __init__(self, smpp_manager: 'SMPPManager', config: Optional[SMPPConfig]=None, logger: Optional[logging.Logger]=None):
+    def __init__(self, smpp_manager: 'SMPPManager', config: Optional[SMPPConfig] = None,
+                 logger: Optional[logging.Logger] = None):
         self.config = config
         self.smpp_manager = smpp_manager
 

@@ -1,12 +1,11 @@
 import argparse
 import asyncio
-import datetime
 import enum
 import logging
 import uuid
 from typing import Dict, Any, Type
 
-from aiosmpp import pdu, log, constants as const
+from aiosmpp import pdu, log
 
 
 class SMPPSessionState(enum.Enum):
@@ -87,7 +86,8 @@ class RawSMPPServer(asyncio.Protocol):
         # ALL BIND TYPES
         elif self.state == SMPPSessionState.BOUND_TRX:
             if command_id not in BOUND_TRX_COMMAND_IDS:
-                self.logger.warning('Command ID {0} not supported whilst in BOUND_TRX state. Closing'.format(command_id))
+                self.logger.warning('Command ID {0} not supported whilst in BOUND_TRX state. '
+                                    'Closing'.format(command_id))
                 self.transport.close()
             elif command_id == pdu.CommandID.ENQUIRE_LINK:
                 self.logger.debug('Sending enquire_link_resp')
@@ -150,23 +150,27 @@ class RawSMPPServer(asyncio.Protocol):
         return True
 
     def handle_bind_transceiver(self, request: Dict[str, Any]) -> bool:
-        self.logger.info('Bind TRX from {0}, pw {1}, system_type {2}'.format(request['system_id'], request['password'], request['system_type']))
+        self.logger.info('Bind TRX from {0}, pw {1}, system_type {2}'.format(
+            request['system_id'], request['password'], request['system_type'])
+        )
         return True
 
     def handle_submit_sm(self, request: Dict[str, Any]) -> str:
         # TODO deal with all the logic of msg combining, getting short_message from tlv if needed
         msg_id = str(uuid.uuid4()).lower().replace('-', '')
 
-        self.logger.info('SMS MT {0} -> {1}: {2}'.format(request['source_addr'], request['dest_addr'], request['short_message']))
+        self.logger.info('SMS MT {0} -> {1}: {2}'.format(
+            request['source_addr'], request['dest_addr'], request['short_message'])
+        )
         self.logger.debug('Values: {0}'.format(request))
 
         # Return MSG ID
         return msg_id
 
 
-def run_server(address: str='0.0.0.0', port: int=2775,
-               smpp_class: Type[RawSMPPServer]=RawSMPPServer,
-               verbose: bool=False):
+def run_server(address: str = '0.0.0.0', port: int = 2775,
+               smpp_class: Type[RawSMPPServer] = RawSMPPServer,
+               verbose: bool = False):
     log_level = logging.DEBUG if verbose else logging.INFO
     logger = log.get_stdout_logger('server', log_level)
 

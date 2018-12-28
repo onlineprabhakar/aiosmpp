@@ -11,7 +11,7 @@ from aiosmpp.log import get_stdout_logger
 from aiohttp import web
 
 
-def app(argv: list=None) -> web.Application:
+def app(argv: list = None) -> web.Application:
     parser = argparse.ArgumentParser(prog='HTTP API')
 
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose mode')
