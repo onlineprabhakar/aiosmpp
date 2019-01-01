@@ -1,3 +1,4 @@
+import pytest
 
 
 async def test_1(http_api_server):

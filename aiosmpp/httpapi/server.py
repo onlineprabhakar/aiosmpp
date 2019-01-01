@@ -31,16 +31,21 @@ class WebHandler(object):
                  config: Optional[HTTPAPIConfig] = None,
                  logger: Optional[logging.Logger] = None,
                  smppmanagerclientclass: Type[SMPPManagerClient] = SMPPManagerClient,
-                 amqp_connect: aioamqp.connect = aioamqp.connect):
+                 amqp_connect: aioamqp.connect = aioamqp.connect,
+                 loop: asyncio.AbstractEventLoop = None):
         self.config = config
 
         self.logger = logger
         if not logger:
             self.logger = logging.getLogger()
 
+        self.loop = loop
+        if not loop:
+            self.loop = asyncio.get_event_loop()
+
         # TODO find smppmanager / put autodiscovery in the class
         self.smpp_manager_client = smppmanagerclientclass(self.config.smpp_client_url, logger=self.logger)
-        self.smpp_manager_client_loop = asyncio.ensure_future(self.smpp_manager_client.run(interval=120))
+        self.smpp_manager_client_loop = asyncio.ensure_future(self.smpp_manager_client.run(interval=120), loop=self.loop)
 
         self.route_table = RouteTable(config, connector_dict=self.smpp_manager_client.connectors)
 
@@ -99,23 +104,14 @@ class WebHandler(object):
     async def on_startup(self, app):
         try:
             self.logger.info('Attempting to contact MQ')
-            # self._amqp_transport, self._amqp_protocol = await self._amqp_connect(
-            #     host=self.config.mq['host'],
-            #     port=self.config.mq['port'],
-            #     login=self.config.mq['user'],
-            #     password=self.config.mq['password'],
-            #     virtualhost=self.config.mq['vhost'],
-            #     ssl=self.config.mq['ssl'],
-            #     heartbeat=self.config.mq['heartbeat_interval']
-            # )
-            self._amqp_transport, self._amqp_protocol = await aioamqp.connect(
-                host='0.0.0.0',
-                port=5672,
-                login='guest',
-                password='guest',
-                virtualhost='/',
-                ssl=False,
-                heartbeat=30
+            self._amqp_transport, self._amqp_protocol = await self._amqp_connect(
+                host=self.config.mq['host'],
+                port=self.config.mq['port'],
+                login=self.config.mq['user'],
+                password=self.config.mq['password'],
+                virtualhost=self.config.mq['vhost'],
+                ssl=self.config.mq['ssl'],
+                heartbeat=self.config.mq['heartbeat_interval']
             )
 
             self.logger.info('Connected to MQ on {0}:{1}'.format(self.config.mq['host'], self.config.mq['port']))
@@ -129,8 +125,14 @@ class WebHandler(object):
             self.smpp_manager_client_loop.cancel()
             await self.smpp_manager_client_loop
             await self.smpp_manager_client.close()
-        except:  # noqa: E722
-            pass
+        except Exception as err:
+            self.logger.exception('Caught exception whilst tearing down smpp manager client', exc_info=err)
+
+        try:
+            await self._amqp_protocol.close()
+            self._amqp_transport.close()
+        except Exception as err:
+            self.logger.exception('Caught exception whilst tearing down amqp class', exc_info=err)
 
     def _set_config_params_in_pdu(self, pdu: Dict[str, Any]) -> Dict[str, Any]:
         modified_pdu = pdu.copy()

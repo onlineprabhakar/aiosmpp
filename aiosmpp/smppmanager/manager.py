@@ -91,15 +91,18 @@ class SMPPConnector(object):
         return SMPPConnectionState.CLOSED
 
     async def run(self):
-        # Connect and listen to queue
-        await self._do_queue_connect()
+        try:
+            # Connect and listen to queue
+            await self._do_queue_connect()
 
-        # Try and connect to the smpp server
-        await self._do_smpp_connect_or_retry()
+            # Try and connect to the smpp server
+            await self._do_smpp_connect_or_retry()
 
-        while True:
-            # print('sleeping')
-            await asyncio.sleep(10)
+            while True:
+                # print('sleeping')
+                await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            pass
 
     async def _do_queue_connect(self):
         try:
@@ -132,6 +135,8 @@ class SMPPConnector(object):
 
             await self._amqp_channel.basic_consume(self._amqp_callback, queue_name=self._queue_name)
             self.logger.info('Set up MQ callback')
+        except asyncio.CancelledError:
+            raise
         except Exception as err:
             self.logger.exception('Unexpected error when trying to connect to MQ', exc_info=err)
 
@@ -537,8 +542,9 @@ class SMPPManager(object):
             try:
                 conn.close()
                 future.cancel()
-            except:  # noqa: E722
-                pass
+                await future
+            except Exception as err:
+                self.logger.exception('Caught exception whilst tearing down smpp connection', exc_info=err)
 
         try:
             self.logger.info('Stopping redis pool')

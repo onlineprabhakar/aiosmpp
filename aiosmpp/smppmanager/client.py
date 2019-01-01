@@ -10,8 +10,8 @@ import aiohttp
 
 
 class SMPPManagerClient(object):
-    def __init__(self, host, timeout=0.5, logger: Optional[logging.Logger] = None):
-        self.host = host
+    def __init__(self, url, timeout=0.5, logger: Optional[logging.Logger] = None):
+        self.url = url
         self.timeout = timeout
         self.logger = logger
         if not logger:

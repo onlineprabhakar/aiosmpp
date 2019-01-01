@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 import logging
 import socket
@@ -125,7 +126,10 @@ async def smpp_management_server(smpp_config, free_port, aiohttp_server):
     web_server = SMPPManagerWeb(smpp_manager=smpp_manager, config=smpp_config, logger=logger)
 
     server = await aiohttp_server(web_server.app())
-    return server
+    yield server
+
+    # Call close as otherwise it calls the close when the event loop is torn down :/
+    await server.close()
 
 
 @pytest.fixture
@@ -138,11 +142,14 @@ def httpapi_config(rabbitmq_container):
 
 
 @pytest.fixture
-async def http_api_server(httpapi_config, smpp_management_server, aiohttp_server):
+async def http_api_server(httpapi_config, smpp_management_server, aiohttp_client):
     logger = logging.getLogger()
     httpapi_config.smpp_client_url = 'http://localhost:' + str(smpp_management_server.port)
 
     web_server = HTTPWeb(config=httpapi_config, logger=logger)
 
-    client = await aiohttp_server(web_server.app())
-    return web_server, client
+    client = await aiohttp_client(web_server.app())
+    yield web_server, client
+
+    # Call close as otherwise it calls the close when the event loop is torn down :/
+    await client.close()
