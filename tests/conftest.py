@@ -57,11 +57,11 @@ async def dlr_mo_server_1():
 
 
 @pytest.fixture
-async def dlr_mo_server_2(loop):
+async def dlr_mo_server_2():
     address, port = '127.0.10.2', 2775
     logger = logging.getLogger()
 
-    server_coro = loop.create_server(lambda: DLRSMPPServer(logger=logger), address, port)
+    server_coro = asyncio.get_event_loop().create_server(lambda: DLRSMPPServer(logger=logger), address, port)
     server = await server_coro
 
     # Serve requests until Ctrl+C is pressed
@@ -75,11 +75,11 @@ async def dlr_mo_server_2(loop):
 
 
 @pytest.fixture
-async def dlr_mo_server_3(loop):
+async def dlr_mo_server_3():
     address, port = '127.0.10.3', 2775
     logger = logging.getLogger()
 
-    server_coro = loop.create_server(lambda: DLRSMPPServer(logger=logger), address, port)
+    server_coro = asyncio.get_event_loop().create_server(lambda: DLRSMPPServer(logger=logger), address, port)
     server = await server_coro
 
     # Serve requests until Ctrl+C is pressed

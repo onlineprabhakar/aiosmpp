@@ -10,18 +10,14 @@ import aiohttp
 
 
 class SMPPManagerClient(object):
-    def __init__(self, host, ssl=None, timeout=0.5, logger: Optional[logging.Logger] = None):
+    def __init__(self, host, timeout=0.5, logger: Optional[logging.Logger] = None):
         self.host = host
-        self.ssl = ssl
         self.timeout = timeout
         self.logger = logger
         if not logger:
             self.logger = logging.getLogger()
 
-        if ssl:
-            self.url = 'https://' + host
-        else:
-            self.url = 'http://' + host
+        # TODO here if scheme is ecs
 
         self.session = None
 

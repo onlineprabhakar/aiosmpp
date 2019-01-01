@@ -54,11 +54,18 @@ class SMPPConfig(object):
         self.connectors[name] = data
 
     @classmethod
-    def from_file(cls, filepath):
+    def from_file(cls, filepath: str = None, config: str = None):
         parser = configparser.ConfigParser()
-        parser.read(filepath)
+        if filepath:
+            parser.read(filepath)
+            reload_func = lambda: cls.from_file(filepath)
+        elif config:
+            parser.read_string(config)
+            reload_func = lambda: cls.from_file(config=filepath)
+        else:
+            raise ValueError('filepath or config argument must be provided')
 
-        return cls(parser, lambda: cls.from_file(filepath))
+        return cls(parser, reload_func)
 
     def reload(self):
         new_obj = self._reload_func()

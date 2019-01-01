@@ -13,6 +13,7 @@ class HTTPAPIConfig(object):
         self._config = config
         self._reload_func = reload_func
 
+        self.smpp_client_url = None
         self.mt_routes = {}
         self.mo_routes = {}
         self.filters = {}
@@ -25,6 +26,8 @@ class HTTPAPIConfig(object):
         self.mt_routes.clear()
         self.mo_routes.clear()
         self.filters.clear()
+
+        self.smpp_client_url = self._config.get('smpp_client', 'url')
 
         self.mq = {
             'host': self._config.get('mq', 'host', fallback='127.0.0.1'),
