@@ -9,7 +9,7 @@ import os
 import struct
 import sys
 import uuid
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import Dict, Any, Optional, TYPE_CHECKING, Type
 
 from aiohttp import web
 
@@ -27,15 +27,19 @@ if TYPE_CHECKING:
 
 
 class WebHandler(object):
-    def __init__(self, config: Optional[HTTPAPIConfig] = None, logger: Optional[logging.Logger] = None):
+    def __init__(self,
+                 config: Optional[HTTPAPIConfig] = None,
+                 logger: Optional[logging.Logger] = None,
+                 smppmanagerclientclass: Type[SMPPManagerClient] = SMPPManagerClient,
+                 amqp_connect: aioamqp.connect = aioamqp.connect):
         self.config = config
 
         self.logger = logger
         if not logger:
             self.logger = logging.getLogger()
 
-        # TODO find smppmanager
-        self.smpp_manager_client = SMPPManagerClient('localhost:8081', logger=self.logger)
+        # TODO find smppmanager / put autodiscovery in the class
+        self.smpp_manager_client = smppmanagerclientclass('localhost:8081', logger=self.logger)
         self.smpp_manager_client_loop = asyncio.ensure_future(self.smpp_manager_client.run(interval=120))
 
         self.route_table = RouteTable(config, connector_dict=self.smpp_manager_client.connectors)
@@ -65,6 +69,7 @@ class WebHandler(object):
             # 'short_message',
         }
 
+        self._amqp_connect = amqp_connect
         self._amqp_transport = None
         self._amqp_protocol = None
         self._amqp_channel = None
@@ -94,7 +99,7 @@ class WebHandler(object):
     async def on_startup(self, app):
         try:
             self.logger.info('Attempting to contact MQ')
-            self._amqp_transport, self._amqp_protocol = await aioamqp.connect(
+            self._amqp_transport, self._amqp_protocol = await self._amqp_connect(
                 host=self.config.mq['host'],
                 port=self.config.mq['port'],
                 login=self.config.mq['user'],
@@ -248,7 +253,7 @@ class WebHandler(object):
                     udh_header = struct.pack('>BBBBBB', 5, 0, 3, msg_ref_num, num_parts, sequence_number)
                     current_pdu['short_message_hex'] = udh_header + current_pdu['short_message_hex']
 
-                    current_pdu['short_message_hex'] = binascii.hexlify(current_pdu['short_message_hex'])
+                    current_pdu['short_message_hex'] = binascii.hexlify(current_pdu['short_message_hex']).decode()
 
                 result['pdus'].append(current_pdu)
 
@@ -265,7 +270,7 @@ class WebHandler(object):
             current_pdu = self._set_config_params_in_pdu(current_pdu)
 
             if isinstance(current_pdu['short_message'], bytes):
-                current_pdu['short_message_hex'] = binascii.hexlify(current_pdu['short_message'])
+                current_pdu['short_message_hex'] = binascii.hexlify(current_pdu['short_message']).decode()
                 current_pdu['short_message'] = None
 
             result['pdus'].append(current_pdu)

@@ -75,6 +75,9 @@ def get_filter(filter_data):
 
 
 # Routes
+class ConnectorDown(Exception):
+    pass
+
 class SMPPConnector:
     def __init__(self, connector_name, connector_data):
         self.name = connector_name
@@ -137,9 +140,6 @@ class StaticRoute(Route):
     def evaluate(self, event):
         # Check if we're connected via SMPP
         # if not, this route is useless
-        if not self.connector:
-            return False
-
         result = True
 
         for _filter in self.filters:
@@ -153,6 +153,10 @@ class StaticRoute(Route):
             # Short circuit
             if not result:
                 break
+
+        # If event is applicable but the connector is down, raise exception to skip the rest of the route table.
+        if result and not self.connector:
+            raise ConnectorDown()
 
         return result
 
@@ -202,6 +206,8 @@ class RouteTable(object):
             try:
                 if route.evaluate(event):
                     return route.connector
+            except ConnectorDown:
+                return None
             except Exception as err:
                 # TODO log
                 print(err)

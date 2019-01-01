@@ -29,9 +29,7 @@ class SMPPManagerClient(object):
 
     def get_session(self):
         if not self.session:
-            self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self.timeout)
-            )
+            self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
         return self.session
 
     async def close(self):
@@ -50,6 +48,8 @@ class SMPPManagerClient(object):
             return json_data
         except asyncio.TimeoutError:
             pass
+        except asyncio.CancelledError:
+            raise
         except Exception as err:
             self.logger.exception('get connectors err', exc_info=err)
 
@@ -72,3 +72,7 @@ class SMPPManagerClient(object):
                 break
             except Exception as err:
                 self.logger.exception('get connectors loop', exc_info=err)
+
+        await self.session.close()
+
+        self.logger.info('Exiting run loop')

@@ -1,6 +1,7 @@
 import pytest
 
 from aiosmpp.httpapi import routetable
+from aiosmpp.httpapi.routetable import ConnectorDown
 
 
 MT_EVENT1 = {
@@ -70,7 +71,8 @@ def test_static_route_no_connector():
     conn_dict = {'connectors': {}}
     route = routetable.StaticRoute(0, 'test1', [], conn_dict)
 
-    assert not route.evaluate(MT_EVENT1)
+    with pytest.raises(ConnectorDown):
+        route.evaluate(MT_EVENT1)
 
 
 def test_static_route_filters():
