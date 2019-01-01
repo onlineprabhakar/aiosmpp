@@ -2,8 +2,10 @@ import asyncio
 import pytest
 import logging
 import socket
+import threading
 from contextlib import closing
 
+from aiosmpp.server import RawSMPPServer
 from aiosmpp.config.httpapi import HTTPAPIConfig
 from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.smppmanager.server import SMPPManager, WebHandler as SMPPManagerWeb
@@ -97,7 +99,7 @@ def free_port():
 
 
 @pytest.fixture
-def smpp_config(rabbitmq_container, redis_container, dlr_mo_server_1, dlr_mo_server_2, dlr_mo_server_3):
+def smpp_config_mtonly(rabbitmq_container, redis_container, mt_server_1, mt_server_2, mt_server_3):
     config = SMPPConfig.from_file(config=SMPP_CONFIG)
 
     # Copy the config to additional smpp connections
@@ -105,12 +107,12 @@ def smpp_config(rabbitmq_container, redis_container, dlr_mo_server_1, dlr_mo_ser
     config.connectors['smpp_conn3'] = config.connectors['smpp_conn1'].copy()
 
     # Change host/port to match random ones
-    config.connectors['smpp_conn1']['host'] = dlr_mo_server_1[0]
-    config.connectors['smpp_conn1']['port'] = str(dlr_mo_server_1[1])
-    config.connectors['smpp_conn2']['host'] = dlr_mo_server_2[0]
-    config.connectors['smpp_conn2']['port'] = str(dlr_mo_server_2[1])
-    config.connectors['smpp_conn3']['host'] = dlr_mo_server_3[0]
-    config.connectors['smpp_conn3']['port'] = str(dlr_mo_server_3[1])
+    config.connectors['smpp_conn1']['host'] = mt_server_1[0]
+    config.connectors['smpp_conn1']['port'] = str(mt_server_1[1])
+    config.connectors['smpp_conn2']['host'] = mt_server_2[0]
+    config.connectors['smpp_conn2']['port'] = str(mt_server_2[1])
+    config.connectors['smpp_conn3']['host'] = mt_server_3[0]
+    config.connectors['smpp_conn3']['port'] = str(mt_server_3[1])
 
     # Adjust port to match container random ports
     config.mq['port'] = rabbitmq_container.ports['5672/tcp'][0]
@@ -120,10 +122,10 @@ def smpp_config(rabbitmq_container, redis_container, dlr_mo_server_1, dlr_mo_ser
 
 
 @pytest.fixture
-async def smpp_management_server(smpp_config, free_port, aiohttp_server):
+async def smpp_management_server_mtonly(smpp_config_mtonly, free_port, aiohttp_server):
     logger = logging.getLogger()
-    smpp_manager = SMPPManager(config=smpp_config, logger=logger)
-    web_server = SMPPManagerWeb(smpp_manager=smpp_manager, config=smpp_config, logger=logger)
+    smpp_manager = SMPPManager(config=smpp_config_mtonly, logger=logger)
+    web_server = SMPPManagerWeb(smpp_manager=smpp_manager, config=smpp_config_mtonly, logger=logger)
 
     server = await aiohttp_server(web_server.app())
     yield server
@@ -142,14 +144,124 @@ def httpapi_config(rabbitmq_container):
 
 
 @pytest.fixture
-async def http_api_server(httpapi_config, smpp_management_server, aiohttp_client):
+async def http_api_server(httpapi_config, aiohttp_server, smpp_management_server_mtonly):
     logger = logging.getLogger()
-    httpapi_config.smpp_client_url = 'http://localhost:' + str(smpp_management_server.port)
+    httpapi_config.smpp_client_url = 'http://localhost:' + str(smpp_management_server_mtonly.port)  # '8081'
 
     web_server = HTTPWeb(config=httpapi_config, logger=logger)
 
-    client = await aiohttp_client(web_server.app())
-    yield web_server, client
+    client = await aiohttp_server(web_server.app())
+    base_url = 'http://{0}:{1}/'.format(client.host, client.port)
 
-    # Call close as otherwise it calls the close when the event loop is torn down :/
+    yield web_server, client, base_url
+
     await client.close()
+
+
+class SimpleReceiveServer(RawSMPPServer):
+    def __init__(self, *args, test_mt_list, **kwargs):
+        super(SimpleReceiveServer, self).__init__(*args, **kwargs)
+
+        self.test_mt_list = test_mt_list
+
+    def handle_submit_sm(self, request) -> str:
+        # Get msg id, from calling the method of the superclass (also does logging)
+        msg_id = super(SimpleReceiveServer, self).handle_submit_sm(request)
+
+        # Return MSG ID, this'll go in the submit sm
+        return msg_id
+
+
+def smpp_server_thread(local_ip: str, port: int, shared_list: list, threading_event: threading.Event):
+    try:
+        logger = logging.getLogger()
+
+        loop = asyncio.new_event_loop()
+        # were in a different thread so set default loop
+        asyncio.set_event_loop(loop)
+
+        # Loop round so that when threading event is set, run_forever will stop
+        async def _close_loop():
+            while True:
+                if threading_event.is_set():
+                    loop.close()
+                    break
+                await asyncio.sleep(0.01, loop=loop)
+
+        asyncio.ensure_future(_close_loop(), loop=loop)
+
+        server_coro = loop.create_server(lambda: SimpleReceiveServer(logger=logger, test_mt_list=shared_list), local_ip, port)
+        server = loop.run_until_complete(server_coro)
+
+        # Serve requests until Ctrl+C is pressed
+        logger.info('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))
+
+        loop.run_forever()
+
+        server.close()
+        loop.run_until_complete(server.wait_closed())
+        loop.close()
+    except Exception as err:
+        raise err
+
+
+
+
+@pytest.fixture
+async def mt_server_1():
+    address, port = '127.0.10.1', 2775
+    logger = logging.getLogger()
+
+    loop = asyncio.get_event_loop()
+
+
+    mt_list = []
+    server_coro = loop.create_server(lambda: SimpleReceiveServer(logger=logger, test_mt_list=mt_list), address, port)
+    server = await server_coro
+
+    # Serve requests until Ctrl+C is pressed
+    logger.info('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))
+
+    yield address, port, mt_list
+
+    # Close the server
+    server.close()
+    await server.wait_closed()
+
+
+@pytest.fixture
+async def mt_server_2():
+    address, port = '127.0.10.2', 2775
+    logger = logging.getLogger()
+
+    mt_list = []
+    server_coro = asyncio.get_event_loop().create_server(lambda: SimpleReceiveServer(logger=logger, test_mt_list=mt_list), address, port)
+    server = await server_coro
+
+    # Serve requests until Ctrl+C is pressed
+    logger.info('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))
+
+    yield address, port, server
+
+    # Close the server
+    server.close()
+    await server.wait_closed()
+
+
+@pytest.fixture
+async def mt_server_3():
+    address, port = '127.0.10.3', 2775
+    logger = logging.getLogger()
+
+    mt_list = []
+    server_coro = asyncio.get_event_loop().create_server(lambda: SimpleReceiveServer(logger=logger, test_mt_list=mt_list), address, port)
+    server = await server_coro
+
+    # Serve requests until Ctrl+C is pressed
+    logger.info('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))
+
+    yield address, port, server
+
+    # Close the server
+    server.close()
+    await server.wait_closed()

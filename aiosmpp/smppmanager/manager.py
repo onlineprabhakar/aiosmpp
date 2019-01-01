@@ -550,8 +550,8 @@ class SMPPManager(object):
             self.logger.info('Stopping redis pool')
             self.redis.close()
             await self.redis.wait_closed()
-        except:  # noqa: E722
-            pass
+        except Exception as err:
+            self.logger.exception('Caught exception whilst tearing down redis', exc_info=err)
 
     async def add_connector(self, name: str, data: Dict[str, str]):
         slugified_name = slugify(name, separator='_')
