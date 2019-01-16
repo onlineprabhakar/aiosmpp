@@ -21,6 +21,9 @@ heartbeat_interval = 1
 [somerandomsection]
 test = 1
 
+[smpp_client]
+url = http://localhost:8081
+
 [mt_route:20]
 type = static
 connector = smpp_conn3

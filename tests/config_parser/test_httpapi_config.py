@@ -10,6 +10,9 @@ user = user
 password = passwd
 heartbeat_interval = 1
 
+[smpp_client]
+url = http://localhost:8081
+
 [somerandomsection]
 test = 1
 

@@ -1,9 +1,11 @@
 import asyncio
+import time
 import pytest
 import logging
 import socket
 import threading
 from contextlib import closing
+import aiohttp.web
 
 from aiosmpp.server import RawSMPPServer
 from aiosmpp.config.httpapi import HTTPAPIConfig
@@ -121,17 +123,73 @@ def smpp_config_mtonly(rabbitmq_container, redis_container, mt_server_1, mt_serv
     return config
 
 
+
+
+def smpp_management_server_thread(local_ip: str, port: int, threading_event: threading.Event, loop, smpp_config):
+    try:
+        logger = logging.getLogger('aiosmpp_smpp_server')
+        # logger.addHandler(logging.StreamHandler())
+        # logger.setLevel(logging.DEBUG)
+
+        # loop = asyncio.new_event_loop()
+        # were in a different thread so set default loop
+        asyncio.set_event_loop(loop)
+
+        # Loop round so that when threading event is set, run_forever will stop
+        async def _close_loop():
+            while True:
+                if threading_event.is_set():
+                    loop.close()
+                    break
+                await asyncio.sleep(0.01, loop=loop)
+
+        asyncio.ensure_future(_close_loop(), loop=loop)
+
+        smpp_manager = SMPPManager(config=smpp_config, logger=logger)
+        web_server = SMPPManagerWeb(smpp_manager=smpp_manager, config=smpp_config, logger=logger)
+
+        logger.info('Serving on {0}:{1}'.format(local_ip, port))
+
+        aiohttp.web.run_app(web_server.app(), handle_signals=False)
+
+        loop.close()
+    except Exception as err:
+        raise err
+
+
 @pytest.fixture
-async def smpp_management_server_mtonly(smpp_config_mtonly, free_port, aiohttp_server):
-    logger = logging.getLogger()
-    smpp_manager = SMPPManager(config=smpp_config_mtonly, logger=logger)
-    web_server = SMPPManagerWeb(smpp_manager=smpp_manager, config=smpp_config_mtonly, logger=logger)
+async def smpp_management_server_mtonly(smpp_config_mtonly, free_port, aiohttp_server, mt_server_1, mt_server_2, mt_server_3):
+    address, port = '127.0.10.4', 8080
+    event = threading.Event()
+    new_loop = asyncio.new_event_loop()
 
-    server = await aiohttp_server(web_server.app())
-    yield server
+    thread = threading.Thread(target=smpp_management_server_thread, args=('127.0.10.4', 8080, event, new_loop, smpp_config_mtonly))
+    thread.start()
+    time.sleep(0.5)
 
-    # Call close as otherwise it calls the close when the event loop is torn down :/
-    await server.close()
+    yield address, port
+
+    asyncio.gather(*asyncio.Task.all_tasks(loop=new_loop), loop=new_loop).cancel()
+    new_loop.stop()
+
+    event.set()
+    thread.join(5)
+
+    i = 0
+    while i < 10 and thread.is_alive():
+        time.sleep(0.5)
+        i += 1
+
+    if thread.is_alive():
+        pytest.fail('Could not stop thread')
+
+
+
+
+
+
+
+
 
 
 @pytest.fixture
@@ -146,7 +204,7 @@ def httpapi_config(rabbitmq_container):
 @pytest.fixture
 async def http_api_server(httpapi_config, aiohttp_server, smpp_management_server_mtonly):
     logger = logging.getLogger()
-    httpapi_config.smpp_client_url = 'http://localhost:' + str(smpp_management_server_mtonly.port)  # '8081'
+    httpapi_config.smpp_client_url = 'http://localhost:' + str(smpp_management_server_mtonly[1])  # '8081'
 
     web_server = HTTPWeb(config=httpapi_config, logger=logger)
 
@@ -159,7 +217,7 @@ async def http_api_server(httpapi_config, aiohttp_server, smpp_management_server
 
 
 class SimpleReceiveServer(RawSMPPServer):
-    def __init__(self, *args, test_mt_list, **kwargs):
+    def __init__(self, *args, test_mt_list: list, **kwargs):
         super(SimpleReceiveServer, self).__init__(*args, **kwargs)
 
         self.test_mt_list = test_mt_list
@@ -168,15 +226,21 @@ class SimpleReceiveServer(RawSMPPServer):
         # Get msg id, from calling the method of the superclass (also does logging)
         msg_id = super(SimpleReceiveServer, self).handle_submit_sm(request)
 
+        self.test_mt_list.append({
+            'source_addr': request['source_addr'],
+            'dest_addr': request['dest_addr'],
+            'short_message': request['short_message'],
+        })
+
         # Return MSG ID, this'll go in the submit sm
         return msg_id
 
 
-def smpp_server_thread(local_ip: str, port: int, shared_list: list, threading_event: threading.Event):
+def smpp_server_thread(local_ip: str, port: int, shared_list: list, threading_event: threading.Event, loop):
     try:
         logger = logging.getLogger()
 
-        loop = asyncio.new_event_loop()
+        # loop = asyncio.new_event_loop()
         # were in a different thread so set default loop
         asyncio.set_event_loop(loop)
 
@@ -205,63 +269,88 @@ def smpp_server_thread(local_ip: str, port: int, shared_list: list, threading_ev
         raise err
 
 
-
-
 @pytest.fixture
 async def mt_server_1():
     address, port = '127.0.10.1', 2775
-    logger = logging.getLogger()
 
-    loop = asyncio.get_event_loop()
-
-
+    event = threading.Event()
     mt_list = []
-    server_coro = loop.create_server(lambda: SimpleReceiveServer(logger=logger, test_mt_list=mt_list), address, port)
-    server = await server_coro
+    new_loop = asyncio.new_event_loop()
 
-    # Serve requests until Ctrl+C is pressed
-    logger.info('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))
+    thread = threading.Thread(target=smpp_server_thread, args=(address, port, mt_list, event, new_loop))
+    thread.start()
+    time.sleep(0.5)
 
     yield address, port, mt_list
 
-    # Close the server
-    server.close()
-    await server.wait_closed()
+    asyncio.gather(*asyncio.Task.all_tasks(loop=new_loop), loop=new_loop).cancel()
+    new_loop.stop()
+
+    event.set()
+    thread.join(5)
+
+    i = 0
+    while i < 10 and thread.is_alive():
+        time.sleep(0.5)
+        i += 1
+
+    if thread.is_alive():
+        pytest.fail('Could not stop thread')
 
 
 @pytest.fixture
 async def mt_server_2():
     address, port = '127.0.10.2', 2775
-    logger = logging.getLogger()
 
+    event = threading.Event()
     mt_list = []
-    server_coro = asyncio.get_event_loop().create_server(lambda: SimpleReceiveServer(logger=logger, test_mt_list=mt_list), address, port)
-    server = await server_coro
+    new_loop = asyncio.new_event_loop()
 
-    # Serve requests until Ctrl+C is pressed
-    logger.info('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))
+    thread = threading.Thread(target=smpp_server_thread, args=(address, port, mt_list, event, new_loop))
+    thread.start()
+    time.sleep(0.5)
 
-    yield address, port, server
+    yield address, port, mt_list
 
-    # Close the server
-    server.close()
-    await server.wait_closed()
+    asyncio.gather(*asyncio.Task.all_tasks(loop=new_loop), loop=new_loop).cancel()
+    new_loop.stop()
+
+    event.set()
+    thread.join(5)
+
+    i = 0
+    while i < 10 and thread.is_alive():
+        time.sleep(0.5)
+        i += 1
+
+    if thread.is_alive():
+        pytest.fail('Could not stop thread')
 
 
 @pytest.fixture
 async def mt_server_3():
     address, port = '127.0.10.3', 2775
-    logger = logging.getLogger()
 
+    event = threading.Event()
     mt_list = []
-    server_coro = asyncio.get_event_loop().create_server(lambda: SimpleReceiveServer(logger=logger, test_mt_list=mt_list), address, port)
-    server = await server_coro
+    new_loop = asyncio.new_event_loop()
 
-    # Serve requests until Ctrl+C is pressed
-    logger.info('Serving on {0[0]}:{0[1]}'.format(server.sockets[0].getsockname()))
+    thread = threading.Thread(target=smpp_server_thread, args=(address, port, mt_list, event, new_loop))
+    thread.start()
+    time.sleep(0.5)
 
-    yield address, port, server
+    yield address, port, mt_list
 
-    # Close the server
-    server.close()
-    await server.wait_closed()
+    asyncio.gather(*asyncio.Task.all_tasks(loop=new_loop), loop=new_loop).cancel()
+    new_loop.stop()
+
+    event.set()
+    thread.join(5)
+
+    i = 0
+    while i < 10 and thread.is_alive():
+        time.sleep(0.5)
+        i += 1
+
+    if thread.is_alive():
+        pytest.fail('Could not stop thread')
