@@ -33,4 +33,4 @@ def app(argv: list = None) -> web.Application:
 
 
 if __name__ == '__main__':
-    web.run_app(app(sys.argv), port=8080)
+    web.run_app(app(sys.argv), port=8082)

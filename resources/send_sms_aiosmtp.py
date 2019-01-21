@@ -9,7 +9,7 @@ baseParams = {
     'content': 'Hello',
     'dlr': 'yes',
     'dlr-method': 'POST',
-    'dlr-url': 'http://172.17.0.1:8080/dlr',
+    'dlr-url': 'http://127.0.0.1:8082/dlr',
     'dlr-level': 3
 }
 

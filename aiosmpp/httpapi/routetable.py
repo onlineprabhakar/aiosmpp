@@ -187,8 +187,18 @@ class RouteTable(object):
     def _create_route(self, route_index: int, route_data: Dict[str, Any]) -> Union[Route, None]:
         route_type = route_data.get('type', 'static')
 
-        needed_filters = [self.filters.get(filter_name) for filter_name in route_data.get('filters', '').split(',') if filter_name]  # noqa: E501
+        required_filters = route_data.get('filters', '').split(',')
+        if required_filters == ['']:
+            required_filters = []
+
+        needed_filters = [self.filters.get(filter_name) for filter_name in required_filters if filter_name]  # noqa: E501
         needed_filters = [x for x in needed_filters if x]
+
+        if len(needed_filters) != len(required_filters):
+            # TODO log
+            print('Needed {0} filters only got {1}, one of these doesnt exist: {2}'.format(len(required_filters), len(needed_filters),
+                                                                                           ', '.join(required_filters)))
+            return None
 
         if route_type in ('static', 'default'):
             return StaticRoute(route_index, route_data['connector'], needed_filters, connector_dict=self.connector_dict)
