@@ -1,5 +1,8 @@
 import enum
 
+DLR_QUEUE = 'dlr'
+MO_QUEUE = 'mo'
+
 
 class AddrTON(enum.IntEnum):
     UNKNOWN = 0x00

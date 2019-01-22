@@ -14,11 +14,13 @@ import aioredis
 
 from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.client import SMPPClientProtocol, SMPPConnectionState
-import aioamqp
-from aioamqp.channel import Channel as AMQPChannel
 from aiosmpp.pdu import Status, TLV
 from aiosmpp import constants as c
 from aiosmpp.utils import parse_dlr_text
+
+import aioamqp
+from aioamqp.channel import Channel as AMQPChannel
+
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -212,7 +214,9 @@ class SMPPConnector(object):
                             'level': event['dlr']['level'],
                             'method': event['dlr']['method'],
                             'url': event['dlr']['url'],
-                            'message_status': text_status
+                            'message_status': text_status,
+
+                            'retries': 0
                         }
 
                         dlr_payload = json.dumps(dlr_payload)
@@ -341,7 +345,9 @@ class SMPPConnector(object):
             'sub': dlr_data['sub'],
             'dlvrd': dlr_data['dlvrd'],
             'err': dlr_data['err'],
-            'text': dlr_data['text']
+            'text': dlr_data['text'],
+
+            'retries': 0
         }
 
         dlr_payload = json.dumps(dlr_payload)
@@ -405,7 +411,9 @@ class SMPPConnector(object):
                 'from': pkt['payload']['source_addr'],
                 'coding': int(data_coding),
                 'origin-connector': self.config['connector_name'],
-                'msg': base64.b64encode(message).decode()
+                'msg': base64.b64encode(message).decode(),
+
+                'retries': 0
             }
 
             mo_payload = json.dumps(mo_payload)
@@ -478,7 +486,9 @@ class SMPPConnector(object):
                     'from': pkt['payload']['source_addr'],
                     'coding': int(data_coding),
                     'origin-connector': self.config['connector_name'],
-                    'msg': base64.b64encode(concatenated_msg).decode()
+                    'msg': base64.b64encode(concatenated_msg).decode(),
+
+                    'retries': 0
                 }
 
                 mo_payload = json.dumps(mo_payload)
@@ -594,8 +604,8 @@ class SMPPManager(object):
             'dlr_expiry': int(data.get('dlr_expiry', '86400')),
             'requeue_delay': int(data.get('requeue_delay', '120')),
             'queue_name': queue_name,
-            'dlr_queue_name': 'dlr',
-            'mo_queue_name': 'mo',
+            'dlr_queue_name': c.DLR_QUEUE,
+            'mo_queue_name': c.MO_QUEUE,
             'mq': self.config.mq
         }
         # Value checking
