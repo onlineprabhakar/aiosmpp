@@ -16,10 +16,12 @@ from aiohttp import web
 from aiosmpp.utils import gsm_encode
 from aiosmpp.constants import AddrTON, AddrNPI, ESMClassMode, ESMClassType, PriorityFlag, \
     RegisteredDeliveryReceipt, ReplaceIfPresentFlag, ESMClassGSMFeatures, MoreMessagesToSend
-from aiosmpp.config.httpapi import HTTPAPIConfig
+from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.httpapi.routetable import RouteTable
 from aiosmpp.smppmanager.client import SMPPManagerClient
 from aiosmpp.log import get_stdout_logger
+from aiosmpp.sqs import SQSManager
+
 import aioamqp
 
 if TYPE_CHECKING:
@@ -28,10 +30,9 @@ if TYPE_CHECKING:
 
 class WebHandler(object):
     def __init__(self,
-                 config: Optional[HTTPAPIConfig] = None,
+                 config: Optional[SMPPConfig] = None,
                  logger: Optional[logging.Logger] = None,
                  smppmanagerclientclass: Type[SMPPManagerClient] = SMPPManagerClient,
-                 amqp_connect: aioamqp.connect = aioamqp.connect,
                  loop: asyncio.AbstractEventLoop = None):
         self.config = config
 
@@ -74,10 +75,7 @@ class WebHandler(object):
             # 'short_message',
         }
 
-        self._amqp_connect = amqp_connect
-        self._amqp_transport = None
-        self._amqp_protocol = None
-        self._amqp_channel = None
+        self._sqs = SQSManager(config=self.config)
 
     @property
     def next_long_msg_ref_num(self) -> int:
@@ -103,20 +101,8 @@ class WebHandler(object):
 
     async def on_startup(self, app):
         try:
-            self.logger.info('Attempting to contact MQ')
-            self._amqp_transport, self._amqp_protocol = await self._amqp_connect(
-                host=self.config.mq['host'],
-                port=self.config.mq['port'],
-                login=self.config.mq['user'],
-                password=self.config.mq['password'],
-                virtualhost=self.config.mq['vhost'],
-                ssl=self.config.mq['ssl'],
-                heartbeat=self.config.mq['heartbeat_interval']
-            )
-
-            self.logger.info('Connected to MQ on {0}:{1}'.format(self.config.mq['host'], self.config.mq['port']))
-            self._amqp_channel = await self._amqp_protocol.channel()
-            self.logger.debug('Created MQ channel')
+            await self._sqs.setup()
+            await self._sqs.create_smpp_queues()
         except Exception as err:
             self.logger.exception('Unexpected error when trying to connect to MQ', exc_info=err)
 
@@ -129,8 +115,7 @@ class WebHandler(object):
             self.logger.exception('Caught exception whilst tearing down smpp manager client', exc_info=err)
 
         try:
-            await self._amqp_protocol.close()
-            self._amqp_transport.close()
+            await self._sqs.close()
         except Exception as err:
             self.logger.exception('Caught exception whilst tearing down amqp class', exc_info=err)
 
@@ -521,7 +506,7 @@ def app(argv: list = None) -> web.Application:
             print('Path "{0}" does not exist, exiting'.format(filepath))
             sys.exit(1)
 
-        config = HTTPAPIConfig.from_file(filepath, logger=conf_logger)
+        config = SMPPConfig.from_file(filepath, logger=conf_logger)
 
     web_server = WebHandler(config=config, logger=logger)
     return web_server.app()
