@@ -76,37 +76,21 @@ def get_filter(filter_data):
 
 # Routes
 class SMPPConnector:
-    def __init__(self, connector_name, connector_data):
+    def __init__(self, connector_name, config):
         self.name = connector_name
-        self.state = connector_data['state']
-        self.config = connector_data['config']
+        self.config = config
 
     @property
     def queue_name(self) -> str:
         return self.config['queue_name']
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            'name': self.name,
-            'data': {
-                'state': self.state,
-                'config': self.config
-            }
-        }
-
-    @classmethod
-    def from_dict(cls, data_dict: dict):
-        return cls(data_dict['name'], data_dict['data'])
-
 
 class Route(object):
-    def __init__(self, order: int, connector_name, filters: List[TransparentFilter] = None, connector_dict=None):
-        if connector_dict is None:
-            connector_dict = {'connectors': {}}
+    def __init__(self, order: int, connector_name, filters: List[TransparentFilter] = None, config=None):
+        self.config = config
 
         self.order = order
         self.connector_name = connector_name  # Contains connector info
-        self.connector_dict = connector_dict
 
         if not filters:
             filters = []
@@ -117,13 +101,13 @@ class Route(object):
         raise NotImplementedError()
 
     def _get_connector(self) -> Union[SMPPConnector, None]:
-        if self.connector_name not in self.connector_dict['connectors']:
+        if self.connector_name not in self.config.connectors:
             return None
 
-        if self.connector_dict['connectors'][self.connector_name]['state'] not in ('BOUND_TRX', 'BOUND_TX'):
-            return None
+        # if self.connector_dict['connectors'][self.connector_name]['state'] not in ('BOUND_TRX', 'BOUND_TX'):
+        #     return None
 
-        return SMPPConnector(self.connector_name, self.connector_dict['connectors'][self.connector_name])
+        return SMPPConnector(self.connector_name, self.config.connectors[self.connector_name])
 
     @property
     def connector(self) -> Union[SMPPConnector, None]:
@@ -131,8 +115,8 @@ class Route(object):
 
 
 class StaticRoute(Route):
-    def __init__(self, order: int, connector_name, filters=None, connector_dict=None):
-        super(StaticRoute, self).__init__(order, connector_name, filters, connector_dict)
+    def __init__(self, order: int, connector_name, filters=None, config=None):
+        super(StaticRoute, self).__init__(order, connector_name, filters, config)
 
     def evaluate(self, event):
         # Check if we're connected via SMPP
@@ -158,12 +142,9 @@ class StaticRoute(Route):
 
 
 class RouteTable(object):
-    def __init__(self, config, route_attr='mt_routes', connector_dict=None):
+    def __init__(self, config, route_attr='mt_routes'):
         # TODO redo, make route table from config, pass route table to connection mgmr to change state of connections
-        if connector_dict is None:
-            connector_dict = {'connectors': {}}
-
-        self.connector_dict = connector_dict
+        self.config = config
 
         self.filters: Dict[str, TransparentFilter] = {}
         self.routes: List[Route] = []
@@ -195,7 +176,7 @@ class RouteTable(object):
             return None
 
         if route_type in ('static', 'default'):
-            return StaticRoute(route_index, route_data['connector'], needed_filters, connector_dict=self.connector_dict)
+            return StaticRoute(route_index, route_data['connector'], needed_filters, config=self.config)
         else:
             # TODO log
             print('Unknown route type {0}'.format(route_type))

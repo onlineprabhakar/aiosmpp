@@ -1,5 +1,6 @@
 import logging
 import hashlib
+import uuid
 from typing import List
 
 from aiosmpp.config.smpp import SMPPConfig
@@ -21,6 +22,48 @@ class SQSManager(object):
 
         self._queue_map = {}
 
+    async def setup(self):
+        pass
+
+    async def close(self):
+        pass
+
+    async def create_smpp_queues(self):
+        pass
+
+    async def send_message(self, queue: str, msg: str, retries: int = 3):
+        pass
+
+    async def receive_messages(self, queue: str) -> List[dict]:
+        return []
+
+    async def delete_messages(self, queue: str, message_ids: List[dict]):
+        pass
+
+
+class MockSQSManager(SQSManager):
+    async def send_message(self, queue: str, msg: str, retries: int = 3):
+        if queue not in self._queue_map:
+            self._queue_map[queue] = []
+
+        self._queue_map[queue].append({'MessageId': uuid.uuid4().hex, 'ReceiptHandle': uuid.uuid4().hex, 'Body': msg})
+
+    async def receive_messages(self, queue: str) -> List[dict]:
+        if queue not in self._queue_map:
+            return []
+
+        items = self._queue_map[queue]
+        self._queue_map[queue].clear()
+        return items
+
+    async def delete_messages(self, queue: str, message_ids: List[dict]):
+        if queue in self._queue_map:
+            items_to_remove = [item for item in self._queue_map[queue] if item['MessageId'] in message_ids]
+            for item in items_to_remove:
+                self._queue_map[queue].remove(item)
+
+
+class AWSSQSManager(SQSManager):
     async def setup(self):
         endpoint_url = self._config.mq['aws_endpoint']
 

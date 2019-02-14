@@ -5,12 +5,14 @@ from typing import Dict, Any, Union, Optional
 
 import aiohttp
 
+from aiosmpp.httpapi.routetable import RouteTable
+
 
 # /api/v1/smpp/connections
 
 
 class SMPPManagerClient(object):
-    def __init__(self, url, timeout=0.5, logger: Optional[logging.Logger] = None):
+    def __init__(self, url: str, route_table: RouteTable, timeout=0.5, logger: Optional[logging.Logger] = None):
         self.url = url
         self.timeout = timeout
         self.logger = logger
@@ -19,9 +21,9 @@ class SMPPManagerClient(object):
 
         # TODO here if scheme is ecs
 
-        self.session = None
+        # TODO hit routetable.connector_status() or something
 
-        self.connectors = {'connectors': {}}
+        self.session = None
 
     def get_session(self):
         if not self.session:
@@ -46,6 +48,8 @@ class SMPPManagerClient(object):
             pass
         except asyncio.CancelledError:
             raise
+        except (ConnectionRefusedError, aiohttp.client_exceptions.ClientConnectorError):
+            self.logger.error('Connection refused to {0}'.format(url))
         except Exception as err:
             self.logger.exception('get connectors err', exc_info=err)
 

@@ -20,9 +20,8 @@ from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.httpapi.routetable import RouteTable
 from aiosmpp.smppmanager.client import SMPPManagerClient
 from aiosmpp.log import get_stdout_logger
-from aiosmpp.sqs import SQSManager
+from aiosmpp.sqs import SQSManager, AWSSQSManager
 
-import aioamqp
 
 if TYPE_CHECKING:
     import multidict
@@ -33,6 +32,7 @@ class WebHandler(object):
                  config: Optional[SMPPConfig] = None,
                  logger: Optional[logging.Logger] = None,
                  smppmanagerclientclass: Type[SMPPManagerClient] = SMPPManagerClient,
+                 sqs_manager: Type[SQSManager] = AWSSQSManager,
                  loop: asyncio.AbstractEventLoop = None):
         self.config = config
 
@@ -43,12 +43,6 @@ class WebHandler(object):
         self.loop = loop
         if not loop:
             self.loop = asyncio.get_event_loop()
-
-        # TODO find smppmanager / put autodiscovery in the class
-        self.smpp_manager_client = smppmanagerclientclass(self.config.smpp_client_url, logger=self.logger)
-        self.smpp_manager_client_loop = asyncio.ensure_future(self.smpp_manager_client.run(interval=120), loop=self.loop)
-
-        self.route_table = RouteTable(config, connector_dict=self.smpp_manager_client.connectors)
 
         self._last_long_msg_ref_num = 0
         self._long_content_max_parts = 5
@@ -75,7 +69,13 @@ class WebHandler(object):
             # 'short_message',
         }
 
-        self._sqs = SQSManager(config=self.config)
+        self._sqs = sqs_manager(config=self.config)
+
+        self.route_table = RouteTable(config)
+
+        # TODO find smppmanager / put autodiscovery in the class
+        self.smpp_manager_client = smppmanagerclientclass(self.config.smpp_client_url, route_table=self.route_table, logger=self.logger)
+        self.smpp_manager_client_loop = asyncio.ensure_future(self.smpp_manager_client.run(interval=120), loop=self.loop)
 
     @property
     def next_long_msg_ref_num(self) -> int:
@@ -447,7 +447,7 @@ class WebHandler(object):
             return web.Response(body='Error "No route found"', status=412)
 
         # Re apply some connector level pdu parameters
-        pdu_event = self._update_config_params_in_pdu(pdu_event, self.config.connectors[connector.name])
+        pdu_event = self._update_config_params_in_pdu(pdu_event, connector.config)
 
         # Set DLR params
         if pdu_event['dlr']:
@@ -507,7 +507,10 @@ def app(argv: list = None) -> web.Application:
 
         config = SMPPConfig.from_file(filepath, logger=conf_logger)
 
-    web_server = WebHandler(config=config, logger=logger)
+    web_server = WebHandler(
+        config=config,
+        logger=logger
+    )
     return web_server.app()
 
 
