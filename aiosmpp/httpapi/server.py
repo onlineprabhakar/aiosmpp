@@ -395,11 +395,10 @@ class WebHandler(object):
     async def publish_pdus_to_queue(self, queue_payload: Dict[str, Any], queue_name: str):
         payload = json.dumps(queue_payload)
 
-        await self._amqp_channel.basic_publish(
-            payload=payload,
-            exchange_name='',
-            routing_key=queue_name
-        )
+        try:
+            await self._sqs.send_message(queue_name, payload)
+        except Exception as err:
+            self.logger.exception('Caught exception whilst trying to push PDU\'s', exc_info=err)
 
     # Legacy send
     async def handler_send(self, request: web.Request) -> web.Response:
@@ -448,7 +447,7 @@ class WebHandler(object):
             return web.Response(body='Error "No route found"', status=412)
 
         # Re apply some connector level pdu parameters
-        pdu_event = self._update_config_params_in_pdu(pdu_event, connector.config)
+        pdu_event = self._update_config_params_in_pdu(pdu_event, self.config.connectors[connector.name])
 
         # Set DLR params
         if pdu_event['dlr']:
