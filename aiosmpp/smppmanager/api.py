@@ -31,11 +31,11 @@ class WebHandler(object):
 
         return _app
 
-    async def startup_tasks(self, _app):
+    async def startup_tasks(self, _app: web.Application):
         self.logger.info('Running SMPP Manager setup')
         await self.smpp_manager.setup()
 
-    async def teardown_tasks(self, _app):
+    async def teardown_tasks(self, _app: web.Application):
         self.logger.info('Running SMPP Manager teardown')
         await self.smpp_manager.teardown()
 
@@ -47,10 +47,7 @@ class WebHandler(object):
         for conn_id, conn_tuple in self.smpp_manager.connectors.items():
             conn, _ = conn_tuple
 
-            result['connectors'][conn_id] = {
-                'state': conn.state.name,
-                'config': conn.config
-            }
+            result['connectors'][conn_id] = conn.state.name
 
         return web.json_response(result)
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import hashlib
 import uuid
@@ -40,6 +41,9 @@ class SQSManager(object):
     async def delete_messages(self, queue: str, message_ids: List[dict]):
         pass
 
+    async def create_queue(self, queue_name: str):
+        pass
+
 
 class MockSQSManager(SQSManager):
     async def send_message(self, queue: str, msg: str, retries: int = 3):
@@ -62,6 +66,10 @@ class MockSQSManager(SQSManager):
             for item in items_to_remove:
                 self._queue_map[queue].remove(item)
 
+    async def create_queue(self, queue_name: str):
+        if queue_name not in self._queue_map:
+            self._queue_map[queue_name] = []
+
 
 class AWSSQSManager(SQSManager):
     async def setup(self):
@@ -72,10 +80,9 @@ class AWSSQSManager(SQSManager):
         client_kwargs = {'region_name': self._config.mq['region'], 'endpoint_url': endpoint_url, 'use_ssl': use_ssl}
         self._sqs_client = aioboto3.client('sqs', **client_kwargs)
 
-    async def create_smpp_queues(self):
-        """
-        Called by HTTP api to create queues to put PDU's on
-        """
+        await self.get_queues()
+
+    async def get_queues(self):
         kwargs = {} if not self._config.mq['name_prefix'] else {'QueueNamePrefix': self._config.mq['name_prefix']}
         resp = await self._sqs_client.list_queues(**kwargs)
 
@@ -83,21 +90,26 @@ class AWSSQSManager(SQSManager):
             name = url.rsplit('/', 1)[-1]
             self._queue_map[name] = url
 
+    async def create_smpp_queues(self):
+        """
+        Called by HTTP api to create queues to put PDU's on
+        """
         for conn_name, conn_data in self._config.connectors.items():
-            queue_name = conn_data['queue_name']
-            use_fifo = self._config.mq['use_fifo']
-            if queue_name in self._queue_map:
+            if conn_data['queue_name'] in self._queue_map:
                 continue
 
-            self.logger.info('Creating Queue {0}'.format(queue_name))
-            try:
-                kwargs = {'Attributes': {'FifoQueue': str(use_fifo).lower()}}
-                resp = await self._sqs_client.create_queue(QueueName=queue_name, **kwargs)
-                self._queue_map[queue_name] = resp['QueueUrl']
-                self.logger.info('Created Queue {0}'.format(queue_name))
-            except Exception as err:
-                self.logger.exception('Caught exception whilst trying to create SQS queue {0}'.format(queue_name),
-                                      exc_info=err, extra={'stack': True})
+            await self.create_queue(conn_data['queue_name'])
+
+    async def create_queue(self, queue_name: str):
+        self.logger.info('Creating Queue {0}'.format(queue_name))
+        try:
+            kwargs = {'Attributes': {'FifoQueue': str(self._config.mq['use_fifo']).lower()}}
+            resp = await self._sqs_client.create_queue(QueueName=queue_name, **kwargs)
+            self._queue_map[queue_name] = resp['QueueUrl']
+            self.logger.info('Created Queue {0}'.format(queue_name))
+        except Exception as err:
+            self.logger.exception('Caught exception whilst trying to create SQS queue {0}'.format(queue_name),
+                                  exc_info=err, extra={'stack': True})
 
     async def close(self):
         await self._sqs_client.close()
@@ -111,12 +123,13 @@ class AWSSQSManager(SQSManager):
         attempt = 0
         while attempt < retries:
             try:
-                await self._sqs_client.send_message(
+                resp = await self._sqs_client.send_message(
                     QueueUrl=queue_url,
                     MessageBody=msg,
                     MessageDeduplicationId=hashlib.md5(msg.encode()).hexdigest(),
                     MessageGroupId=queue
                 )
+                self.logger.info('Submitted message {0} {1} to {2}'.format(resp['MessageId'], resp['SequenceNumber'], queue))
                 break
             except Exception as err:
                 self.logger.exception('Failed to push message to queue {0}, attempt: {1}'.format(queue, attempt),
@@ -125,7 +138,7 @@ class AWSSQSManager(SQSManager):
         else:
             raise Exception('Failed to put message in {0} tries'.format(attempt))
 
-    async def receive_messages(self, queue: str) -> List[dict]:
+    async def receive_messages(self, queue: str, max_messages: int = 5, wait_time: int = 20) -> List[dict]:
         try:
             queue_url = self._queue_map[queue]
         except KeyError:
@@ -134,10 +147,13 @@ class AWSSQSManager(SQSManager):
         try:
             resp = await self._sqs_client.receive_message(
                 QueueUrl=queue_url,
-                WaitTimeSeconds=60
+                MaxNumberOfMessages=max_messages,
+                WaitTimeSeconds=wait_time
             )
             messages = resp.get('Messages', [])
 
+        except asyncio.CancelledError:
+            raise
         except Exception as err:
             self.logger.exception('Failed to receive messages from {0}'.format(queue), exc_info=err)
             messages = []
@@ -154,5 +170,7 @@ class AWSSQSManager(SQSManager):
             resp = await self._sqs_client.delete_message_batch(QueueUrl=queue_url, Entries=message_ids)
             if 'Failed' in resp:
                 self.logger.warning('SQS failed to delete the following from {0}, {1}'.format(queue, resp['Failed']))
+        except asyncio.CancelledError:
+            raise
         except Exception as err:
             self.logger.exception('Failed to delete messages from {0}'.format(queue), exc_info=err)

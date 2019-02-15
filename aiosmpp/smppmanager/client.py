@@ -21,7 +21,7 @@ class SMPPManagerClient(object):
 
         # TODO here if scheme is ecs
 
-        # TODO hit routetable.connector_status() or something
+        self._route_table = route_table
 
         self.session = None
 
@@ -62,10 +62,8 @@ class SMPPManagerClient(object):
                 if not connector_data:
                     self.logger.warning('failed to get connector data')
                 else:
+                    self._route_table.update_connector_status(connector_data['connectors'])
                     self.logger.debug('Updated SMPP connector data')
-                    self.connectors['connectors'].clear()
-                    self.connectors.update(connector_data)
-                    self.connectors['last_updated'] = datetime.datetime.now()
 
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:

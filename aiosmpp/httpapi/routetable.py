@@ -1,3 +1,4 @@
+import datetime
 import re
 from typing import List, Union, Dict, Any
 
@@ -148,6 +149,8 @@ class RouteTable(object):
 
         self.filters: Dict[str, TransparentFilter] = {}
         self.routes: List[Route] = []
+        self._connector_status = {}
+        self._last_updated = None
 
         for filter_name, filter_data in config.filters.items():
             self.filters[filter_name] = get_filter(filter_data)
@@ -196,3 +199,10 @@ class RouteTable(object):
                 print(err)
         else:
             return None
+
+    def update_connector_status(self, connector_status_dict: Dict[str, str]):
+        self._connector_status.clear()
+        self._last_updated = datetime.datetime.utcnow()
+
+        # Should be connector_name => connector_status
+        self._connector_status.update(connector_status_dict)

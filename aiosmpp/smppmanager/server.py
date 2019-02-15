@@ -49,4 +49,5 @@ def app(argv: list = None) -> web.Application:
 
 
 if __name__ == '__main__':
-    web.run_app(app(sys.argv), port=8081)
+    print('Running server on 8081')
+    web.run_app(app(sys.argv), port=8081, print=lambda x: None)

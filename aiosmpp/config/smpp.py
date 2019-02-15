@@ -102,12 +102,11 @@ class SMPPConfig(object):
             print('Connector {0} already exists, overwriting'.format(name))
 
         queue_name = self.mq['name_prefix'] + self.sqs_queue_filter('smppconn_' + name) + self.mq['name_suffix']
-        logger_name = '.'.join((self.logger.name, queue_name))
 
         # Convert whats in the config to all the SMPP settings
         final = {
             'connector_name': name,
-            'logger_name': logger_name,
+            'logger_name': queue_name.replace('.', '_'),
             'host': data['host'],
             'port': int(data['port']),
             'bind_type': data.get('bind_type', 'TRX'),

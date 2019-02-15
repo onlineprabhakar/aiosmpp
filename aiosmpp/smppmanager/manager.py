@@ -7,8 +7,7 @@ import pickle
 import os
 import sys
 import uuid
-import warnings
-from typing import Optional, Dict, Tuple, Any, List
+from typing import Optional, Dict, Tuple, Any, List, Type
 
 import aioredis
 
@@ -18,13 +17,7 @@ from aiosmpp.pdu import Status, TLV
 from aiosmpp import constants as c
 from aiosmpp.utils import parse_dlr_text
 
-import aioamqp
-from aioamqp.channel import Channel as AMQPChannel
-
-
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", category=DeprecationWarning)
-    from slugify import slugify
+from aiosmpp.sqs import SQSManager, AWSSQSManager
 
 
 def try_format(value, func, default=None, warn_str=None, allow_none=False):
@@ -41,19 +34,20 @@ def try_format(value, func, default=None, warn_str=None, allow_none=False):
 
 
 class SMPPConnector(object):
-    def __init__(self, config: Dict[str, Any], redis=None, loop: Optional[asyncio.AbstractEventLoop] = None,
-                 logger: Optional[logging.Logger] = None):
-        self.config = config
+    def __init__(self, smpp_config: Dict[str, Any], base_config: SMPPConfig, redis=None, loop: Optional[asyncio.AbstractEventLoop] = None,
+                 logger: Optional[logging.Logger] = None, sqs_class: Type[SQSManager] = AWSSQSManager):
+        self.config = smpp_config
+        self._all_config = base_config
         self._smpp_proto: SMPPClientProtocol = None
 
         self.logger = logger
         if not logger:
             self.logger = logging.getLogger()
 
-        self._amqp_transport = None
-        self._amqp_protocol: aioamqp.AmqpProtocol = None
-        self._amqp_channel: AMQPChannel = None
-        self._queue_name = config['queue_name']
+        self._sqs = sqs_class(base_config, self.logger)
+        self._sqs_receiver: asyncio.Future = None
+
+        self._queue_name = smpp_config['queue_name']
         self._redis = redis
 
         self._loop = loop
@@ -65,12 +59,13 @@ class SMPPConnector(object):
     def __del__(self):
         self.close()
 
+    # TODO make this async
     def close(self):
         self._smpp_close()
 
         try:
-            if self._amqp_transport:
-                self._amqp_transport.close()
+            if self._sqs_receiver:
+                self._sqs_receiver.cancel()
         except:  # noqa: E722
             pass
 
@@ -108,73 +103,79 @@ class SMPPConnector(object):
 
     async def _do_queue_connect(self):
         try:
-            self.logger.info('Attempting to contact MQ')
-            self._amqp_transport, self._amqp_protocol = await aioamqp.connect(
-                host=self.config['mq']['host'],
-                port=self.config['mq']['port'],
-                login=self.config['mq']['user'],
-                password=self.config['mq']['password'],
-                virtualhost=self.config['mq']['vhost'],
-                ssl=False,
-                heartbeat=self.config['mq']['heartbeat_interval']
-            )
-            self.logger.info('Connected to MQ on {0}:{1}'.format(self.config['mq']['host'], self.config['mq']['port']))
-            self._amqp_channel = await self._amqp_protocol.channel()
-            self.logger.debug('Created MQ channel')
+            self.logger.info('Attempting to create Queues')
+            await self._sqs.setup()
+            await self._sqs.create_queue(self._queue_name)
+            self.logger.info('Created queue {0}'.format(self._queue_name))
+            await self._sqs.create_queue(self.config['dlr_queue_name'])
+            self.logger.info('Created queue {0}'.format(self.config['dlr_queue_name']))
+            await self._sqs.create_queue(self.config['mo_queue_name'])
 
-            # Declare DLR queue
-            await self._amqp_channel.queue_declare(self.config['dlr_queue_name'], durable=True)
-            self.logger.info('Declared MQ queue {0}'.format(self.config['dlr_queue_name']))
-            # Declare MO queue
-            await self._amqp_channel.queue_declare(self.config['mo_queue_name'], durable=True)
-            self.logger.info('Declared MQ queue {0}'.format(self.config['mo_queue_name']))
-            # Declare MT queue
-            await self._amqp_channel.queue_declare(self._queue_name, durable=True)
-            self.logger.info('Declared MQ queue {0}'.format(self._queue_name))
-            # Setup QOS so we only take 1 msg at a time
-            await self._amqp_channel.basic_qos(prefetch_count=1, prefetch_size=0, connection_global=False)
-            self.logger.debug('Set MQ QOS Settings')
-
-            await self._amqp_channel.basic_consume(self._amqp_callback, queue_name=self._queue_name)
-            self.logger.info('Set up MQ callback')
+            self._sqs_receiver = asyncio.ensure_future(self._sqs_recv_loop())
+            self.logger.info('Set up SES Poll loop')
         except asyncio.CancelledError:
             raise
         except Exception as err:
             self.logger.exception('Unexpected error when trying to connect to MQ', exc_info=err)
 
-    async def _amqp_callback(self, channel, body, envelope, properties):
-        try:
-            payload = json.loads(body.decode())
-        except ValueError as err:
-            self.logger.exception('SMPP Event on MQ is not valid json', exc_info=err)
-            return
-        except Exception as err:
-            self.logger.exception('Unknown error occurned during AMQP callback', exc_info=err)
-            return
+    async def _sqs_recv_loop(self):
+        while True:
+            try:
+                to_delete = []
 
-        req_id = payload.get('req_id', 'UNKNOWN_ID')
+                for message in await self._sqs.receive_messages(self._queue_name):
+                    msg_id = message['MessageId']
+                    receipt_handle = message['ReceiptHandle']
+                    ack = False
 
-        if not payload.get('pdus', []):
-            self.logger.error('{0} | SMPP Event doesnt have any PDUs'.format(req_id))
-            return
+                    try:
+                        payload = json.loads(message['Body'])
+                    except ValueError as err:
+                        self.logger.exception('SMPP Event on MQ is not valid json', exc_info=err)
+                        ack = True
+                    except Exception as err:
+                        self.logger.exception('Unknown error occurned during SQS receive', exc_info=err)
+                        # ack = True
+                    else:
+                        # We've decoded event
+                        req_id = payload.get('req_id', 'UNKNOWN_ID')
 
-        src_addr = payload['pdus'][0]['source_addr']
-        dest_addr = payload['pdus'][0]['destination_addr']
+                        if not payload.get('pdus', []):
+                            self.logger.error('{0} | SMPP Event doesnt have any PDUs'.format(req_id))
+                            ack = True
 
-        self.logger.info('{0} | Processing SMPP Request {1} -> {2}'.format(req_id, src_addr, dest_addr))
+                        src_addr = payload['pdus'][0]['source_addr']
+                        dest_addr = payload['pdus'][0]['destination_addr']
 
-        try:
-            await self.send_pdus(payload)
-        except Exception as err:
-            self.logger.error('Caught exception whilst sending PDUs {0}'.format(err))
+                        self.logger.info('{0} | Processing SMPP Request {1} -> {2}'.format(req_id, src_addr, dest_addr))
 
-        await channel.basic_client_ack(delivery_tag=envelope.delivery_tag)
+                        try:
+                            await self.send_pdus(payload)
+                            ack = True
+                        except Exception as err:
+                            self.logger.exception('Caught exception whilst sending PDUs {0}'.format(err), exc_info=err)
+
+                    if ack:
+                        to_delete.append({'Id': msg_id, 'ReceiptHandle': receipt_handle})
+                    else:
+                        self.logger.warning('Message {0} not ack\'d, it\'ll get redelivered'.format(self.logger))
+
+                if to_delete:
+                    await self._sqs.delete_messages(self._queue_name, to_delete)
+                    self.logger.info('Removed {0} messages'.format(len(to_delete)))
+
+                self.logger.info('Completed SQS loop')
+
+            except asyncio.CancelledError:
+                break
+            except Exception as err:
+                logging.exception('Caught exception during SES Loop', exc_info=err)
 
     async def send_pdus(self, event: Dict[str, Any]):
         # DLR will come on the last PDU
 
         last_pdu = len(event['pdus']) - 1
-        has_dlr = 'dlr' in event
+        has_dlr = 'dlr' in event and event['dlr']
 
         for index, pdu in enumerate(event['pdus']):
             result = await self._smpp_proto.send_submit_sm(timeout=0.5, **pdu)
@@ -222,11 +223,7 @@ class SMPPConnector(object):
                         dlr_payload = json.dumps(dlr_payload)
 
                         try:
-                            await self._amqp_channel.basic_publish(
-                                payload=dlr_payload,
-                                exchange_name='',
-                                routing_key=self.config['dlr_queue_name']
-                            )
+                            await self._sqs.send_message(self.config['dlr_queue_name'], dlr_payload)
                             self.logger.info('Pushed DLR {0} to queue {1}'.format(event['req_id'],
                                                                                   self.config['dlr_queue_name']))
                         except Exception as err:
@@ -245,7 +242,7 @@ class SMPPConnector(object):
     async def _do_smpp_connect_or_retry(self):
         if not self._smpp_proto:
             self.logger.info('Connecting to SMPP server on {0}:{1}'.format(self.config['host'], self.config['port']))
-            self._smpp_proto: SMPPClientProtocol = None
+            self._smpp_proto = None
 
             logger_name = '.'.join((self.logger.name, 'client'))
             try:
@@ -256,7 +253,7 @@ class SMPPConnector(object):
                     self.config['port']
                 )
 
-                self._smpp_proto = conn
+                self._smpp_proto: SMPPClientProtocol = conn
                 self._smpp_proto.set_connection_lost_callback(self.connection_lost_trigger)
                 self._smpp_proto.set_deliver_sm_callback(self.deliver_sm_trigger)
 
@@ -353,11 +350,7 @@ class SMPPConnector(object):
         dlr_payload = json.dumps(dlr_payload)
 
         try:
-            await self._amqp_channel.basic_publish(
-                payload=dlr_payload,
-                exchange_name='',
-                routing_key=self.config['dlr_queue_name']
-            )
+            await self._sqs.send_message(self.config['dlr_queue_name'], dlr_payload)
             self.logger.info('Pushed DLR {0} to queue {1}'.format(dlr_redis_data['id'], self.config['dlr_queue_name']))
         except Exception as err:
             self.logger.exception('Failed to publish DLR to queue {0}'.format(
@@ -419,11 +412,7 @@ class SMPPConnector(object):
             mo_payload = json.dumps(mo_payload)
 
             try:
-                await self._amqp_channel.basic_publish(
-                    payload=mo_payload,
-                    exchange_name='',
-                    routing_key=self.config['mo_queue_name']
-                )
+                await self._sqs.send_message(self.config['mo_queue_name'], mo_payload)
                 self.logger.info('Pushed SMS-MO {0} to queue {1}'.format(message_id, self.config['mo_queue_name']))
             except Exception as err:
                 self.logger.exception('Failed to publish SMS-MO to queue {0}'.format(
@@ -494,11 +483,7 @@ class SMPPConnector(object):
                 mo_payload = json.dumps(mo_payload)
 
                 try:
-                    await self._amqp_channel.basic_publish(
-                        payload=mo_payload,
-                        exchange_name='',
-                        routing_key=self.config['mo_queue_name']
-                    )
+                    await self._sqs.send_message(self.config['mo_queue_name'], mo_payload)
                     self.logger.info('Pushed SMS-MO {0} to queue {1}'.format(message_id, self.config['mo_queue_name']))
                 except Exception as err:
                     self.logger.exception('Failed to publish SMS-MO to queue {0}'.format(
@@ -563,57 +548,15 @@ class SMPPManager(object):
         except Exception as err:
             self.logger.exception('Caught exception whilst tearing down redis', exc_info=err)
 
-    async def add_connector(self, name: str, data: Dict[str, str]):
-        slugified_name = slugify(name, separator='_')
-        queue_name = 'smpp_' + slugified_name
-
-        logger_name = '.'.join((self.logger.name, slugified_name))
-
-        smpp_config = {
-            'connector_name': slugified_name,
-            'host': data['host'],
-            'port': int(data['port']),
-            'bind_type': data.get('bind_type', 'TRX'),
-            'ssl': data.get('ssl', 'no').lower() == 'yes',
-            'systemid': data['systemid'],
-            'password': data['password'],
-            'conn_loss_retry': data.get('conn_loss_retry', 'yes').lower() == 'yes',
-            'conn_loss_delay': int(data.get('conn_loss_delay', '30')),
-            'priority_flag': int(data.get('priority', '0')),
-            'submit_throughput': int(data.get('submit_throughput', '1')),
-            'coding': int(data.get('coding', '1')),
-            'enquire_link_interval': int(data.get('enquire_link_interval', '30')),
-            'replace_if_present_flag': int(data.get('replace_if_present_flag', '0')),
-            'protocol_id': try_format(data.get('proto_id'), int,
-                                      warn_str='proto_id must be an integer not {0}', allow_none=True),
-            'validity_period': try_format(data.get('validity'), int,
-                                          warn_str='validity must be an integer not {0}', allow_none=True),
-            'service_type': data.get('systype'),
-            'addr_range': data.get('addr_range'),
-            # Type of number / numbering plan identification,
-            'source_addr_ton': int(data.get('src_ton', '2')),
-            'source_addr_npi': int(data.get('src_npi', '1')),
-            'dest_addr_ton': int(data.get('dst_ton', '1')),
-            'dest_addr_npi': int(data.get('dst_npi', '1')),
-            'bind_ton': int(data.get('bind_ton', '0')),
-            'bind_npi': int(data.get('bind_npi', '1')),
-            'sm_default_msg_id': int(data.get('sm_default_msg_id', '0')),
-
-            # Non protocol config
-            'dlr_msgid': int(data.get('dlr_msgid', '0')),
-            'dlr_expiry': int(data.get('dlr_expiry', '86400')),
-            'requeue_delay': int(data.get('requeue_delay', '120')),
-            'queue_name': queue_name,
-            'dlr_queue_name': c.DLR_QUEUE,
-            'mo_queue_name': c.MO_QUEUE,
-            'mq': self.config.mq
-        }
+    async def add_connector(self, name: str, smpp_config: Dict[str, str]):
         # Value checking
         if smpp_config['bind_type'] not in ('TX', 'RX', 'TRX'):
             print('bind_type ({0}) is not TX, RX, TRX. Setting to TRX'.format(smpp_config['bind_type']))
             smpp_config['bind_type'] = 'TRX'
 
-        conn = SMPPConnector(config=smpp_config, logger=logging.getLogger(logger_name), redis=self.redis)
+        logger_name = 'aiosmpp.smppmanager.{0}'.format(smpp_config['logger_name'])
+
+        conn = SMPPConnector(smpp_config=smpp_config, base_config=self.config, logger=logging.getLogger(logger_name), redis=self.redis)
         future = asyncio.ensure_future(conn.run())
 
         self.connectors[name] = (conn, future)
