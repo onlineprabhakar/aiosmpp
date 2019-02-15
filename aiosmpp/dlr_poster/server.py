@@ -4,12 +4,12 @@ import logging
 import sys
 import os
 import json
+from typing import Type, Tuple
 
 import aiohttp
-import aioamqp
-from aiosmpp.config.httpapi import HTTPAPIConfig
+from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.log import get_stdout_logger
-from aiosmpp.constants import DLR_QUEUE
+from aiosmpp.sqs import SQSManager, AWSSQSManager
 
 
 # TODO make configurable
@@ -17,75 +17,86 @@ RETRY_COUNT = 5
 
 
 class DLRPoster(object):
-    def __init__(self, config: HTTPAPIConfig, logger: logging.Logger):
+    def __init__(self, config: SMPPConfig, logger: logging.Logger, sqs_class: Type[SQSManager] = AWSSQSManager):
         self.logger = logger
         self.config = config
 
-        self.http_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(verify_ssl=False))
+        self._sqs = sqs_class(config=config)
+        self._sqs_receiver: asyncio.Future = None
 
-        self.amqp_transport = None
-        self.amqp_protocol = None
-        self.amqp_channel = None
+        self.http_session: aiohttp.ClientSession = None
 
     async def close(self):
         self.logger.info('Stopping DLR Poster')
         await self.http_session.close()
-        await self.amqp_protocol.close()
-        self.amqp_transport.close()
+        await self._sqs.close()
         self.logger.info('Tore down DLR Poster connections')
 
     async def setup(self):
         self.logger.info('Starting DLR Poster setup')
-        self.logger.debug('Connecting to MQ {0}:{1}'.format(self.config.mq['host'], self.config.mq['port']))
-        self.amqp_transport, self.amqp_protocol = await aioamqp.connect(
-            host=self.config.mq['host'],
-            port=self.config.mq['port'],
-            login=self.config.mq['user'],
-            password=self.config.mq['password'],
-            virtualhost=self.config.mq['vhost'],
-            ssl=self.config.mq['ssl'],
-            heartbeat=self.config.mq['heartbeat_interval']
-        )
-        self.amqp_channel = await self.amqp_protocol.channel()
-        self.logger.info('Connected to MQ {0}:{1}'.format(self.config.mq['host'], self.config.mq['port']))
+        await self._sqs.setup()
+        await self._sqs.create_queue(self.config.dlr_queue)
+        self.logger.info('Finished SQS setup')
 
-        # Declare queue
-        await self.amqp_channel.queue_declare(queue_name=DLR_QUEUE, durable=True)
-        self.logger.info('Declared queue {0}'.format(DLR_QUEUE))
+        # TODO make configurable
+        timeout = aiohttp.ClientTimeout(total=2)
+        connector = aiohttp.TCPConnector(verify_ssl=False)
+        self.http_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
         self.logger.info('Finished DLR Poster setup')
 
     async def run(self):
-        # TODO make the qos configurable
-        await self.amqp_channel.basic_qos(prefetch_count=8, prefetch_size=0, connection_global=False)
-        await self.amqp_channel.basic_consume(self.amqp_callback, queue_name=DLR_QUEUE)
-        self.logger.info('Configured QOS. Beginning processing loop')
+        while True:
+            try:
+                coros = []
+                to_delete = []
 
-        try:
-            while True:
-                await asyncio.sleep(1)
+                for message in await self._sqs.receive_messages(self.config.dlr_queue):
+                    msg_id = message['MessageId']
+                    receipt_handle = message['ReceiptHandle']
 
-        except asyncio.CancelledError:
-            pass
+                    try:
+                        payload = json.loads(message['Body'])
+                    except ValueError as err:
+                        self.logger.exception('SMPP Event on MQ is not valid json', exc_info=err)
+                        to_delete.append({'Id': msg_id, 'ReceiptHandle': receipt_handle})
+                    except Exception as err:
+                        self.logger.exception('Unknown error occurned during SQS receive', exc_info=err)
+                        # ack = True
+                    else:
+                        # We've decoded event
+                        # TODO do all the _process_dlr in parallel
+                        coros.append(self._process_dlr(payload, msg_id, receipt_handle))
 
-    async def amqp_callback(self, channel, body, envelope, properties):
-        self.logger.debug("DLR_DATA {0}".format(body))
-        data = json.loads(body)
+                results = await asyncio.gather(*coros)
+                # Sort through the results and keep any that [0] is True
+                to_delete.extend([{'Id': res[1], 'ReceiptHandle': res[2]} for res in results if res[0]])
+
+                if to_delete:
+                    await self._sqs.delete_messages(self.config.dlr_queue, to_delete)
+                    self.logger.info('Removed {0} messages'.format(len(to_delete)))
+
+                self.logger.info('Completed SQS loop')
+
+            except asyncio.CancelledError:
+                break
+            except Exception as err:
+                logging.exception('Caught exception during SES Loop', exc_info=err)
+
+    async def _process_dlr(self, data: dict, msg_id: str, receipt_handle: str) -> Tuple[bool, str, str]:
+        self.logger.debug("DLR_DATA {0}".format(data))
 
         if 'id' not in data:
             self.logger.warning('DLR does not contain ID field, skipping')
-            await channel.basic_client_ack(envelope.delivery_tag)
-            return
+            return False, msg_id, receipt_handle
 
         self.logger.info('Processing DLR {0}'.format(data['id']))
 
         if 'url' not in data:
             self.logger.warning('JSON payload missing URL field, skipping')
-            await channel.basic_client_ack(envelope.delivery_tag)
-            return
+            return False, msg_id, receipt_handle
         if 'method' not in data:
             self.logger.warning('JSON payload missing HTTP method field, skipping')
-            await channel.basic_client_ack(envelope.delivery_tag)
-            return
+            return False, msg_id, receipt_handle
 
         # So by this point we have enough data to do something
         method = data['method']
@@ -109,16 +120,16 @@ class DLRPoster(object):
                 # If If we have a decent looking status code
                 if 200 <= resp.status < 400:
                     # Ack and quit
-                    await channel.basic_client_ack(envelope.delivery_tag)
                     self.logger.info('Successfully posterd DLR {0}'.format(data['id']))
-                    return
+                    return True, msg_id, receipt_handle
 
                 # 422 is too many requests, retry
                 elif resp.status == 422:
                     self.logger.warning('{0} returned 422, retrying'.format(data['id']))
                 else:
                     self.logger.warning('Got unknown status code {0}, retrying'.format(resp.status))
-
+        except aiohttp.client_exceptions.ClientConnectorError:
+            self.logger.warning('Failed to connect to {0}'.format(url))
         except Exception as err:
             self.logger.exception('Caught exception whilst trying to post DLR', exc_info=err)
 
@@ -130,14 +141,11 @@ class DLRPoster(object):
             data['retries'] = retries
             payload = json.dumps(data)
             try:
-                await self.amqp_channel.basic_publish(payload=payload, exchange_name='', routing_key=DLR_QUEUE)
+                await self._sqs.send_message(self.config.dlr_queue, payload)
             except Exception as err:
                 self.logger.exception('Caught exception whilst trying to republish DLR', exc_info=err)
 
-        try:
-            await channel.basic_client_ack(envelope.delivery_tag)
-        except Exception as err:
-            self.logger.exception('Caught exception whilst trying to ack DLR', exc_info=err)
+        return True, msg_id, receipt_handle
 
 
 async def main():
@@ -167,7 +175,7 @@ async def main():
             print('Path "{0}" does not exist, exiting'.format(filepath))
             sys.exit(1)
 
-        config = HTTPAPIConfig.from_file(filepath, logger=conf_logger)
+        config = SMPPConfig.from_file(filepath, logger=conf_logger)
 
     dlr_poster = DLRPoster(config, logger)
     await dlr_poster.setup()
