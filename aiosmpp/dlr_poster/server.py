@@ -13,7 +13,7 @@ from aiosmpp.sqs import SQSManager, AWSSQSManager
 
 
 # TODO make configurable
-RETRY_COUNT = 5
+RETRY_COUNT = 10  # Means max exponential backoff is 1024, will me min'd to sqs's 900
 
 
 class DLRPoster(object):
@@ -140,8 +140,11 @@ class DLRPoster(object):
         else:
             data['retries'] = retries
             payload = json.dumps(data)
+
+            exp_backoff = 2**retries
+
             try:
-                await self._sqs.send_message(self.config.dlr_queue, payload)
+                await self._sqs.send_message(self.config.dlr_queue, payload, delay_seconds=exp_backoff)
             except Exception as err:
                 self.logger.exception('Caught exception whilst trying to republish DLR', exc_info=err)
 

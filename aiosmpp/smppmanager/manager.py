@@ -17,7 +17,7 @@ from aiosmpp.pdu import Status, TLV
 from aiosmpp import constants as c
 from aiosmpp.utils import parse_dlr_text
 
-from aiosmpp.sqs import SQSManager, AWSSQSManager
+from aiosmpp.sqs import SQSManager, AWSSQSManager, QueueNotFound
 
 
 def try_format(value, func, default=None, warn_str=None, allow_none=False):
@@ -165,11 +165,14 @@ class SMPPConnector(object):
                     self.logger.info('Removed {0} messages'.format(len(to_delete)))
 
                 self.logger.info('Completed SQS loop')
+            except QueueNotFound:
+                self.logger.error('SQS queue {0} not found'.format(self._queue_name))
+                await asyncio.sleep(5)
 
             except asyncio.CancelledError:
                 break
             except Exception as err:
-                logging.exception('Caught exception during SES Loop', exc_info=err)
+                self.logger.exception('Caught exception during SES Loop', exc_info=err)
 
     async def send_pdus(self, event: Dict[str, Any]):
         # DLR will come on the last PDU

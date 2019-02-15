@@ -32,10 +32,10 @@ class SQSManager(object):
     async def create_smpp_queues(self):
         pass
 
-    async def send_message(self, queue: str, msg: str, retries: int = 3):
+    async def send_message(self, queue: str, msg: str, retries: int = 3, delay_seconds: int = 0):
         pass
 
-    async def receive_messages(self, queue: str) -> List[dict]:
+    async def receive_messages(self, queue: str, max_messages: int = 5, wait_time: int = 20) -> List[dict]:
         return []
 
     async def delete_messages(self, queue: str, message_ids: List[dict]):
@@ -46,13 +46,13 @@ class SQSManager(object):
 
 
 class MockSQSManager(SQSManager):
-    async def send_message(self, queue: str, msg: str, retries: int = 3):
+    async def send_message(self, queue: str, msg: str, retries: int = 3, delay_seconds: int = 0):
         if queue not in self._queue_map:
             self._queue_map[queue] = []
 
         self._queue_map[queue].append({'MessageId': uuid.uuid4().hex, 'ReceiptHandle': uuid.uuid4().hex, 'Body': msg})
 
-    async def receive_messages(self, queue: str) -> List[dict]:
+    async def receive_messages(self, queue: str, max_messages: int = 5, wait_time: int = 20) -> List[dict]:
         if queue not in self._queue_map:
             return []
 
@@ -72,6 +72,11 @@ class MockSQSManager(SQSManager):
 
 
 class AWSSQSManager(SQSManager):
+    def __init__(self, *args, **kwargs):
+        super(AWSSQSManager, self).__init__(*args, **kwargs)
+
+        self._QueueDoesNotExist = QueueNotFound
+
     async def setup(self):
         endpoint_url = self._config.mq['aws_endpoint']
 
@@ -79,6 +84,7 @@ class AWSSQSManager(SQSManager):
         use_ssl = False if endpoint_url and not endpoint_url.startswith('https') else True
         client_kwargs = {'region_name': self._config.mq['region'], 'endpoint_url': endpoint_url, 'use_ssl': use_ssl}
         self._sqs_client = aioboto3.client('sqs', **client_kwargs)
+        self._QueueDoesNotExist = self._sqs_client.exceptions.QueueDoesNotExist
 
         await self.get_queues()
 
@@ -103,8 +109,19 @@ class AWSSQSManager(SQSManager):
     async def create_queue(self, queue_name: str):
         self.logger.info('Creating Queue {0}'.format(queue_name))
         try:
-            kwargs = {'Attributes': {'FifoQueue': str(self._config.mq['use_fifo']).lower()}}
-            resp = await self._sqs_client.create_queue(QueueName=queue_name, **kwargs)
+            if queue_name.endswith('.fifo'):
+                kwargs = {'Attributes': {'FifoQueue': 'true'}}
+            else:
+                kwargs = {}
+
+            try:
+                resp = await self._sqs_client.create_queue(QueueName=queue_name, **kwargs)
+            except self._sqs_client.exceptions.QueueDeletedRecently:
+                self.logger.warning('Queue {0} was deleted recently, waiting 70 seconds before trying again'.format(queue_name))
+                # Amazon requirement of 60s wait
+                await asyncio.sleep(70)
+                resp = await self._sqs_client.create_queue(QueueName=queue_name, **kwargs)
+
             self._queue_map[queue_name] = resp['QueueUrl']
             self.logger.info('Created Queue {0}'.format(queue_name))
         except Exception as err:
@@ -114,20 +131,25 @@ class AWSSQSManager(SQSManager):
     async def close(self):
         await self._sqs_client.close()
 
-    async def send_message(self, queue: str, msg: str, retries: int = 3):
+    async def send_message(self, queue: str, msg: str, retries: int = 3, delay_seconds: int = 0):
         try:
             queue_url = self._queue_map[queue]
         except KeyError:
             raise QueueNotFound('Failed to find queue url for {0}'.format(queue))
 
         attempt = 0
+
+        # Force it to 0 if a fifo queue
+        delay_seconds = min([delay_seconds if not queue.endswith('.fifo') else 0, 900])
+
         while attempt < retries:
             try:
                 resp = await self._sqs_client.send_message(
                     QueueUrl=queue_url,
                     MessageBody=msg,
                     MessageDeduplicationId=hashlib.md5(msg.encode()).hexdigest(),
-                    MessageGroupId=queue
+                    MessageGroupId=queue,
+                    DelaySeconds=delay_seconds
                 )
                 self.logger.info('Submitted message {0} {1} to {2}'.format(resp['MessageId'], resp['SequenceNumber'], queue))
                 break
@@ -154,6 +176,8 @@ class AWSSQSManager(SQSManager):
 
         except asyncio.CancelledError:
             raise
+        except self._QueueDoesNotExist:
+            raise QueueNotFound('Queue {0} does not exist in SQS, if it has just been created, it will take some time'.format(queue))
         except Exception as err:
             self.logger.exception('Failed to receive messages from {0}'.format(queue), exc_info=err)
             messages = []

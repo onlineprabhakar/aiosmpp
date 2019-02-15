@@ -6,15 +6,15 @@ from typing import Callable, Optional, Tuple, Dict, Any
 from aiosmpp import constants as c
 
 
-def _try_format(value, func, default=None, warn_str=None, allow_none=False):
+def _try_format(value: Any, func, default: Any = None, warn_str: str = None, allow_none: bool = False, logger: logging.Logger = None):
     if allow_none and value is None:
         return value
 
     try:
         value = func(value)
     except Exception:
-        if warn_str:
-            print(warn_str.format(value=value))
+        if warn_str and logger:
+            logger.warning(warn_str.format(value=value))
         value = default
     return value
 
@@ -63,14 +63,16 @@ class SMPPConfig(object):
             'region': self._config.get('sqs', 'region'),
             'aws_endpoint': self._config.get('sqs', 'endpoint', fallback=None),
             'name_prefix': self._config.get('sqs', 'prefix', fallback=''),
-            'use_fifo': self._config.getboolean('sqs', 'use_fifo', fallback=False)
+            'use_fifo_for_sms_queues': self._config.getboolean('sqs', 'use_fifo_for_sms_queues', fallback=False),
+            'use_fifo_for_dlr': self._config.getboolean('sqs', 'use_fifo_for_dlr', fallback=False),
+            'use_fifo_for_mo': self._config.getboolean('sqs', 'use_fifo_for_mo', fallback=False)
         }
         if self.mq['name_prefix']:
             self.mq['name_prefix'] += '_'
-        self.mq['name_suffix'] = '.fifo' if self.mq['use_fifo'] else ''
+        self.mq['name_suffix'] = '.fifo' if self.mq['use_fifo_for_sms_queues'] else ''
 
-        self.dlr_queue = self.mq['name_prefix'] + c.DLR_QUEUE + self.mq['name_suffix']
-        self.mo_queue = self.mq['name_prefix'] + c.MO_QUEUE + self.mq['name_suffix']
+        self.dlr_queue = self.mq['name_prefix'] + c.DLR_QUEUE + ('.fifo' if self.mq['use_fifo_for_dlr'] else '')
+        self.mo_queue = self.mq['name_prefix'] + c.MO_QUEUE + ('.fifo' if self.mq['use_fifo_for_mo'] else '')
 
         self.smpp_client_url = self._config.get('smpp_client', 'url')
 
@@ -85,7 +87,7 @@ class SMPPConfig(object):
             elif section.startswith('mt_route:'):
                 self._add_mt_route(section)
             else:
-                print('Unknown section: {0}'.format(section))
+                self.logger.warning('Unknown section: {0}'.format(section))
 
         # Get Redis settings
         self.redis = {
@@ -99,7 +101,7 @@ class SMPPConfig(object):
         data = dict(self._config[section])
 
         if name in self.connectors:
-            print('Connector {0} already exists, overwriting'.format(name))
+            self.logger.warning('Connector {0} already exists, overwriting'.format(name))
 
         queue_name = self.mq['name_prefix'] + self.sqs_queue_filter('smppconn_' + name) + self.mq['name_suffix']
 
@@ -120,8 +122,8 @@ class SMPPConfig(object):
             'coding': int(data.get('coding', '1')),
             'enquire_link_interval': int(data.get('enquire_link_interval', '30')),
             'replace_if_present_flag': int(data.get('replace_if_present_flag', '0')),
-            'protocol_id': _try_format(data.get('proto_id'), int, warn_str='proto_id must be an integer not {0}', allow_none=True),
-            'validity_period': _try_format(data.get('validity'), int, warn_str='validity must be an integer not {0}', allow_none=True),
+            'protocol_id': _try_format(data.get('proto_id'), int, warn_str='proto_id must be an integer not {0}', allow_none=True, logger=self.logger),
+            'validity_period': _try_format(data.get('validity'), int, warn_str='validity must be an integer not {0}', allow_none=True, logger=self.logger),
             'service_type': data.get('systype'),
             'addr_range': data.get('addr_range'),
             # Type of number / numbering plan identification,
