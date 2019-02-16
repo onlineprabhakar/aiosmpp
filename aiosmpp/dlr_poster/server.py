@@ -50,7 +50,12 @@ class DLRPoster(object):
                 coros = []
                 to_delete = []
 
-                for message in await self._sqs.receive_messages(self.config.dlr_queue):
+                # TODO add some dodgy logic here so that we can delay messages greater than 15min
+                # i.e not_before field which contains future timestamp, so you can shortcut the function and put back on queue
+                # as cumulative time of exponential backoff to 10 is around 30ish minutes, ideally i'd like to make the attempt
+                # number configurable and allow upto 6h of backoff (gives me enough time to wake up and fix things)
+
+                for message in await self._sqs.receive_messages(self.config.dlr_queue, max_messages=10):
                     msg_id = message['MessageId']
                     receipt_handle = message['ReceiptHandle']
 
@@ -89,7 +94,7 @@ class DLRPoster(object):
             self.logger.warning('DLR does not contain ID field, skipping')
             return False, msg_id, receipt_handle
 
-        self.logger.info('Processing DLR {0}'.format(data['id']))
+        self.logger.info('Processing DLR {0} {1}'.format(data['id'], data['message_status']))
 
         if 'url' not in data:
             self.logger.warning('JSON payload missing URL field, skipping')

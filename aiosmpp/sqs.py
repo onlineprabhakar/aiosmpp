@@ -140,18 +140,23 @@ class AWSSQSManager(SQSManager):
         attempt = 0
 
         # Force it to 0 if a fifo queue
-        delay_seconds = min([delay_seconds if not queue.endswith('.fifo') else 0, 900])
+        delay_seconds = min([delay_seconds, 900])
 
         while attempt < retries:
             try:
-                resp = await self._sqs_client.send_message(
-                    QueueUrl=queue_url,
-                    MessageBody=msg,
-                    MessageDeduplicationId=hashlib.md5(msg.encode()).hexdigest(),
-                    MessageGroupId=queue,
-                    DelaySeconds=delay_seconds
-                )
-                self.logger.info('Submitted message {0} {1} to {2}'.format(resp['MessageId'], resp['SequenceNumber'], queue))
+                kwargs = {
+                    'QueueUrl': queue_url,
+                    'MessageBody': msg,
+                }
+                if queue.endswith('.fifo'):
+                    kwargs['MessageDeduplicationId'] = hashlib.md5(msg.encode()).hexdigest()
+                    kwargs['MessageGroupId'] = queue
+                    # DelaySeconds is queue-wide when using fifo
+                else:
+                    kwargs['DelaySeconds'] = delay_seconds
+
+                resp = await self._sqs_client.send_message(**kwargs)
+                self.logger.info('Submitted message {0} {1} to {2}'.format(resp['MessageId'], resp.get('SequenceNumber', ''), queue))
                 break
             except Exception as err:
                 self.logger.exception('Failed to push message to queue {0}, attempt: {1}'.format(queue, attempt),
@@ -161,6 +166,10 @@ class AWSSQSManager(SQSManager):
             raise Exception('Failed to put message in {0} tries'.format(attempt))
 
     async def receive_messages(self, queue: str, max_messages: int = 5, wait_time: int = 20) -> List[dict]:
+        # Limits imposed by amazon
+        max_messages = min([max_messages, 10])
+        wait_time = min([wait_time, 20])
+
         try:
             queue_url = self._queue_map[queue]
         except KeyError:
