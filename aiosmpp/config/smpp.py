@@ -78,8 +78,10 @@ class SMPPConfig(object):
 
         for section in self._config.sections():
 
-            if section.startswith('mo_route:') or section in ('sqs',):
+            if section in ('sqs',):
                 continue
+            elif section.startswith('mo_route:'):
+                self._add_mo_route(section)
             elif section.startswith('smpp_bind:'):
                 self._add_connector(section)
             elif section.startswith('filter:'):
@@ -156,12 +158,17 @@ class SMPPConfig(object):
 
         self.filters[name] = data
 
+    def _add_mo_route(self, section: str):
+        name, data = self._get_route(section)
+
+        self.mo_routes[name] = data
+
     def _add_mt_route(self, section: str):
-        name, data = self._add_route(section)
+        name, data = self._get_route(section)
 
         self.mt_routes[name] = data
 
-    def _add_route(self, section: str) -> Tuple[str, Dict[str, Any]]:
+    def _get_route(self, section: str) -> Tuple[str, Dict[str, Any]]:
         name = section.split(':', 1)[-1]
         data = dict(self._config[section])
 

@@ -16,7 +16,7 @@ from aiosmpp.sqs import SQSManager, AWSSQSManager
 RETRY_COUNT = 10  # Means max exponential backoff is 1024, will me min'd to sqs's 900
 
 
-class DLRPoster(object):
+class MOPoster(object):
     def __init__(self, config: SMPPConfig, logger: logging.Logger, sqs_class: Type[SQSManager] = AWSSQSManager):
         self.logger = logger
         self.config = config
@@ -27,22 +27,22 @@ class DLRPoster(object):
         self.http_session: aiohttp.ClientSession = None
 
     async def close(self):
-        self.logger.info('Stopping DLR Poster')
+        self.logger.info('Stopping MO Poster')
         await self.http_session.close()
         await self._sqs.close()
-        self.logger.info('Tore down DLR Poster connections')
+        self.logger.info('Tore down MO Poster connections')
 
     async def setup(self):
-        self.logger.info('Starting DLR Poster setup')
+        self.logger.info('Starting MO Poster setup')
         await self._sqs.setup()
-        await self._sqs.create_queue(self.config.dlr_queue)
+        await self._sqs.create_queue(self.config.mo_queue)
         self.logger.info('Finished SQS setup')
 
         # TODO make configurable
         timeout = aiohttp.ClientTimeout(total=2)
         connector = aiohttp.TCPConnector(verify_ssl=False)
         self.http_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
-        self.logger.info('Finished DLR Poster setup')
+        self.logger.info('Finished MO Poster setup')
 
     async def run(self):
         while True:
@@ -55,7 +55,7 @@ class DLRPoster(object):
                 # as cumulative time of exponential backoff to 10 is around 30ish minutes, ideally i'd like to make the attempt
                 # number configurable and allow upto 6h of backoff (gives me enough time to wake up and fix things)
 
-                for message in await self._sqs.receive_messages(self.config.dlr_queue, max_messages=10):
+                for message in await self._sqs.receive_messages(self.config.mo_queue, max_messages=10):
                     msg_id = message['MessageId']
                     receipt_handle = message['ReceiptHandle']
 
@@ -68,15 +68,14 @@ class DLRPoster(object):
                         self.logger.exception('Unknown error occurned during SQS receive', exc_info=err)
                         # ack = True
                     else:
-                        # We've decoded event
-                        coros.append(self._process_dlr(payload, msg_id, receipt_handle))
+                        coros.append(self._process_mo(payload, msg_id, receipt_handle))
 
                 results = await asyncio.gather(*coros)
                 # Sort through the results and keep any that [0] is True
                 to_delete.extend([{'Id': res[1], 'ReceiptHandle': res[2]} for res in results if res[0]])
 
                 if to_delete:
-                    await self._sqs.delete_messages(self.config.dlr_queue, to_delete)
+                    await self._sqs.delete_messages(self.config.mo_queue, to_delete)
                     self.logger.info('Removed {0} messages'.format(len(to_delete)))
 
                 self.logger.info('Completed SQS loop')
@@ -86,45 +85,48 @@ class DLRPoster(object):
             except Exception as err:
                 logging.exception('Caught exception during SES Loop', exc_info=err)
 
-    async def _process_dlr(self, data: dict, msg_id: str, receipt_handle: str) -> Tuple[bool, str, str]:
-        self.logger.debug("DLR_DATA {0}".format(data))
+    async def _process_mo(self, data: dict, msg_id: str, receipt_handle: str) -> Tuple[bool, str, str]:
+        self.logger.debug("MO_DATA {0}".format(data))
 
         if 'id' not in data:
-            self.logger.warning('DLR does not contain ID field, skipping')
+            self.logger.warning('MO does not contain ID field, skipping')
             return False, msg_id, receipt_handle
 
-        self.logger.info('Processing DLR {0} {1}'.format(data['id'], data['message_status']))
+        self.logger.info('Processing MO {0} {1}'.format(data['id'], data['message_status']))
+        # {
+        #   "id": "141f0bce-8e2c-43d8-af90-06ff3b1b28ef",
+        #   "to": "447222222222",
+        #   "from": "447111111111",
+        #   "coding": 0,
+        #   "origin-connector":
+        #   "smpp_conn1",
+        #   "msg": "SGVsbG8=",
+        #   "retries": 0
+        # }
 
-        if 'url' not in data:
-            self.logger.warning('JSON payload missing URL field, skipping')
-            return False, msg_id, receipt_handle
-        if 'method' not in data:
-            self.logger.warning('JSON payload missing HTTP method field, skipping')
-            return False, msg_id, receipt_handle
+        # TODO msg decoding based on coding value, aka gsm7, utf 16 -> bin etc...
 
-        # So by this point we have enough data to do something
-        method = data['method']
-        url = data['url']
+        # TODO mo_route_table
+        route = self.config.mo_routes['0']
         retries = int(data.get('retries', '0'))
+        url = route['url']
 
         # Create POST payload, remove operational fields
         payload = data.copy()
-        del payload['url']
-        del payload['method']
         del payload['retries']
 
-        if method == 'GET':
-            kwargs = {'params': payload}
-        else:
-            kwargs = {'json': payload}
+        if route['type'] == 'json':
+            kwargs = {'url': url, 'json': payload}
+        else:  # Form
+            kwargs = {'url': url, 'data': payload}
 
         try:
             # Attemp to do POST/GET
-            async with self.http_session.request(method, url, **kwargs) as resp:
+            async with self.http_session.post(**kwargs) as resp:
                 # If If we have a decent looking status code
                 if 200 <= resp.status < 400:
                     # Ack and quit
-                    self.logger.info('Successfully posterd DLR {0}'.format(data['id']))
+                    self.logger.info('Successfully posterd MO {0}'.format(data['id']))
                     return True, msg_id, receipt_handle
 
                 # 422 is too many requests, retry
@@ -135,7 +137,7 @@ class DLRPoster(object):
         except aiohttp.client_exceptions.ClientConnectorError:
             self.logger.warning('Failed to connect to {0}'.format(url))
         except Exception as err:
-            self.logger.exception('Caught exception whilst trying to post DLR', exc_info=err)
+            self.logger.exception('Caught exception whilst trying to post MO', exc_info=err)
 
         retries += 1
 
@@ -148,9 +150,9 @@ class DLRPoster(object):
             exp_backoff = 2**retries
 
             try:
-                await self._sqs.send_message(self.config.dlr_queue, payload, delay_seconds=exp_backoff)
+                await self._sqs.send_message(self.config.mo_queue, payload, delay_seconds=exp_backoff)
             except Exception as err:
-                self.logger.exception('Caught exception whilst trying to republish DLR', exc_info=err)
+                self.logger.exception('Caught exception whilst trying to republish MO', exc_info=err)
 
         return True, msg_id, receipt_handle
 
@@ -167,8 +169,8 @@ async def main():
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logger = get_stdout_logger('dlrposter', log_level)
-    conf_logger = get_stdout_logger('dlrposter.config', log_level)
+    logger = get_stdout_logger('moposter', log_level)
+    conf_logger = get_stdout_logger('moposter.config', log_level)
 
     config = None
     if getattr(args, 'config.file') and getattr(args, 'config.dynamodb.table'):
@@ -184,14 +186,14 @@ async def main():
 
         config = SMPPConfig.from_file(filepath, logger=conf_logger)
 
-    dlr_poster = DLRPoster(config, logger)
-    await dlr_poster.setup()
+    mo_poster = MOPoster(config, logger)
+    await mo_poster.setup()
     try:
-        await dlr_poster.run()
+        await mo_poster.run()
     except (asyncio.CancelledError, KeyboardInterrupt):
         pass
     finally:
-        await dlr_poster.close()
+        await mo_poster.close()
 
 
 asyncio.get_event_loop().run_until_complete(main())
