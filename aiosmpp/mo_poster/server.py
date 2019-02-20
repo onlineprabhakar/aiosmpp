@@ -115,7 +115,7 @@ class MOPoster(object):
         payload = data.copy()
         del payload['retries']
 
-        if route['type'] == 'json':
+        if route['response_type'] == 'json':
             kwargs = {'url': url, 'json': payload}
         else:  # Form
             kwargs = {'url': url, 'data': payload}

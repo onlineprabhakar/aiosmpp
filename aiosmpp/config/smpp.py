@@ -1,5 +1,6 @@
 import configparser
 import logging
+import os
 import string
 from typing import Callable, Optional, Tuple, Dict, Any
 
@@ -36,6 +37,8 @@ class SMPPConfig(object):
         self.mt_routes = {}
         self.mo_routes = {}
 
+        self.mt_interceptors = {}
+
         self.mq = {}
         self.redis = {}
 
@@ -56,6 +59,7 @@ class SMPPConfig(object):
         self.connectors.clear()
         self.mt_routes.clear()
         self.mo_routes.clear()
+        self.mt_interceptors.clear()
         self.filters.clear()
 
         # Get MQ settings
@@ -88,6 +92,8 @@ class SMPPConfig(object):
                 self._add_filter(section)
             elif section.startswith('mt_route:'):
                 self._add_mt_route(section)
+            elif section.startswith('mt_interceptor:'):
+                self._add_mt_interceptor(section)
             else:
                 self.logger.warning('Unknown section: {0}'.format(section))
 
@@ -167,6 +173,19 @@ class SMPPConfig(object):
         name, data = self._get_route(section)
 
         self.mt_routes[name] = data
+
+    def _add_mt_interceptor(self, section: str):
+        name = section.split(':', 1)[-1]
+        script = self._config.get(section, 'script', fallback=None)
+        filters = self._config.get(section, 'filters', fallback=None)
+        if filters is None:
+            filters = []
+        else:
+            filters = [item.strip() for item in filters.split(',')]
+
+        if script:
+            script = os.path.abspath(script)
+            self.mt_interceptors[name] = {'script': script, 'filters': filters}
 
     def _get_route(self, section: str) -> Tuple[str, Dict[str, Any]]:
         name = section.split(':', 1)[-1]

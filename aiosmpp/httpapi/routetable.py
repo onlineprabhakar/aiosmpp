@@ -1,8 +1,9 @@
 import datetime
-import re
 from typing import List, Union, Dict, Any
 
-
+from aiosmpp.interceptor import Interceptor
+from aiosmpp.config.smpp import SMPPConfig
+from aiosmpp.filters import get_filter, TransparentFilter
 # Event
 # {
 #    "pdus": [{ PDU }, ...],
@@ -22,57 +23,6 @@ from typing import List, Union, Dict, Any
 #    }
 # }
 #
-
-
-class TransparentFilter(object):
-    def evaluate(self, event: dict) -> bool:
-        return True
-
-
-class ConnectorFilter(TransparentFilter):
-    def __init__(self, connector: str):
-        self.connector = connector
-
-    def evaluate(self, event):
-        return event.get('origin-connector', '__unknown__') == self.connector
-
-
-class SourceAddrFilter(TransparentFilter):
-    FIELD = 'to'
-
-    def __init__(self, filter_regex: str):
-        self.regex = re.compile(filter_regex)
-
-    def evaluate(self, event):
-        val = event.get(self.FIELD, '__unknown__')
-        return self.regex.match(val) is not None
-
-
-class DestinationAddrFilter(SourceAddrFilter):
-    FIELD = 'from'
-
-
-class ShortMessageFilter(SourceAddrFilter):
-    FIELD = 'msg'
-
-
-class TagFilter(TransparentFilter):
-    def __init__(self, tag: int):
-        self.tag = tag
-
-    def evaluate(self, event):
-        return self.tag in event.get('tags', [])
-
-
-def get_filter(filter_data):
-    filter_type = filter_data.get('type', 'transparent')
-
-    if filter_type == 'tag':
-        return TagFilter(int(filter_data['tag']))
-    elif filter_type == 'destaddr':
-        return DestinationAddrFilter(filter_data['regex'])
-    else:
-        return TransparentFilter()
 
 
 # Routes
@@ -143,19 +93,26 @@ class StaticRoute(Route):
 
 
 class RouteTable(object):
-    def __init__(self, config, route_attr='mt_routes'):
-        # TODO redo, make route table from config, pass route table to connection mgmr to change state of connections
+    def __init__(self, config: SMPPConfig):
         self.config = config
+
+    def evaluate(self, event: dict) -> Any:
+        raise NotImplementedError()
+
+
+class MTRouteTable(RouteTable):
+    def __init__(self, *args, route_attr='mt_routes', **kwargs):
+        super(MTRouteTable, self).__init__(*args, **kwargs)
 
         self.filters: Dict[str, TransparentFilter] = {}
         self.routes: List[Route] = []
         self._connector_status = {}
         self._last_updated = None
 
-        for filter_name, filter_data in config.filters.items():
+        for filter_name, filter_data in self.config.filters.items():
             self.filters[filter_name] = get_filter(filter_data)
 
-        for route_index, route_data in getattr(config, route_attr, []).items():
+        for route_index, route_data in getattr(self.config, route_attr, []).items():
             route = self._create_route(int(route_index), route_data)
             if route:
                 self.routes.append(route)
@@ -206,3 +163,34 @@ class RouteTable(object):
 
         # Should be connector_name => connector_status
         self._connector_status.update(connector_status_dict)
+
+
+class MTInterceptorTable(RouteTable):
+    def __init__(self, *args, **kwargs):
+        super(MTInterceptorTable, self).__init__(*args, **kwargs)
+
+        self.filters: Dict[str, TransparentFilter] = {}
+        self.interceptors: List[Interceptor] = []
+
+        for filter_name, filter_data in self.config.filters.items():
+            self.filters[filter_name] = get_filter(filter_data)
+
+        for interceptor_order, interceptor_data in self.config.mt_interceptors.items():
+            filters = []
+            for needed_filter in interceptor_data['filters']:
+                try:
+                    filters.append(self.filters[needed_filter])
+                except KeyError:
+                    print('Filter {0} not found'.format(needed_filter))
+
+            new_interceptor = Interceptor(interceptor_order, interceptor_data['script'], filters)
+            self.interceptors.append(new_interceptor)
+
+    def _order_interceptors(self):
+        self.interceptors.sort(reverse=True, key=lambda interceptor: interceptor.order)
+
+    def evaluate(self, event: dict) -> dict:
+        for interceptor in self.interceptors:
+            if interceptor.match(event):
+                return interceptor.run(event)
+        return event

@@ -5,14 +5,14 @@ from typing import Dict, Any, Union, Optional
 
 import aiohttp
 
-from aiosmpp.httpapi.routetable import RouteTable
+from aiosmpp.httpapi.routetable import MTRouteTable
 
 
 # /api/v1/smpp/connections
 
 
 class SMPPManagerClient(object):
-    def __init__(self, url: str, route_table: RouteTable, timeout=0.5, logger: Optional[logging.Logger] = None):
+    def __init__(self, url: str, route_table: MTRouteTable, timeout=0.5, logger: Optional[logging.Logger] = None):
         self.url = url
         self.timeout = timeout
         self.logger = logger

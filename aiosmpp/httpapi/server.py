@@ -17,7 +17,7 @@ from aiosmpp.utils import gsm_encode
 from aiosmpp.constants import AddrTON, AddrNPI, ESMClassMode, ESMClassType, PriorityFlag, \
     RegisteredDeliveryReceipt, ReplaceIfPresentFlag, ESMClassGSMFeatures, MoreMessagesToSend
 from aiosmpp.config.smpp import SMPPConfig
-from aiosmpp.httpapi.routetable import RouteTable
+from aiosmpp.httpapi.routetable import MTRouteTable, MTInterceptorTable
 from aiosmpp.smppmanager.client import SMPPManagerClient
 from aiosmpp.log import get_stdout_logger
 from aiosmpp.sqs import SQSManager, AWSSQSManager
@@ -71,7 +71,8 @@ class WebHandler(object):
 
         self._sqs = sqs_manager(config=self.config)
 
-        self.route_table = RouteTable(config)
+        self.interceptor_table = MTInterceptorTable(config)
+        self.route_table = MTRouteTable(config)
 
         # TODO find smppmanager / put autodiscovery in the class
         self.smpp_manager_client = smppmanagerclientclass(self.config.smpp_client_url, route_table=self.route_table, logger=self.logger)
@@ -128,7 +129,7 @@ class WebHandler(object):
 
         return modified_pdu
 
-    def _update_config_params_in_pdu(self, pdu: Dict[str, Any], connector_config: Dict[str, Any]) -> Dict[str, Any]:
+    def _update_config_params_in_pdu(self, event: Dict[str, Any], connector_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Take PDU dict, and update any non locked values
         """
@@ -144,7 +145,7 @@ class WebHandler(object):
             'sm_default_msg_id',
         ]
 
-        locked_params = pdu.get('locked', [])
+        locked_params = event.get('locked', [])
 
         for param in config_update_params:
             if param in locked_params:  # Skip locked values
@@ -152,10 +153,10 @@ class WebHandler(object):
             if param not in connector_config:  # Skip values not in smpp config
                 continue
 
-            for current_pdu in pdu['pdus']:
+            for current_pdu in event['pdus']:
                 current_pdu[param] = connector_config[param]
 
-        return pdu
+        return event
 
     def create_submitsm_pdus(self, source_address, destination_address, short_message, data_coding) -> Dict[str, Any]:
         """
@@ -440,6 +441,7 @@ class WebHandler(object):
         # TODO Evaluate interceptor table
         # TODO Process active intercept
         # print()
+        pdu_event = self.interceptor_table.evaluate(pdu_event)
 
         connector = self.route_table.evaluate(pdu_event)
         if connector is None:
