@@ -8,6 +8,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from aiosmpp.smppmanager.manager import SMPPConnector
+from aiosmpp.config.smpp import SMPPConfig
+from aiosmpp.sqs import MockSQSManager
 from aiosmpp import pdu
 from aiosmpp import constants as const
 
@@ -50,34 +52,22 @@ class AIORedisStub(object):
         self.calls['expire'].append((args, kwargs))
 
 
-def AsyncMock(*args, **kwargs):
-    m = MagicMock(*args, **kwargs)
 
-    async def mock_coro(*args, **kwargs):
-        return m(*args, **kwargs)
+@pytest.fixture()
+async def get_mocked_connector(get_resource):
+    redis_mock = AIORedisStub()
 
-    mock_coro.mock = m
-    return mock_coro
+    config = SMPPConfig.from_file(config=get_resource('smpp.conf').decode())
 
-
-def get_mocked_connector(redis_mock: AIORedisStub = None):
-    if not redis_mock:
-        redis_mock = AIORedisStub()
-
-    amqp_base = AsyncMock()
-    amqp_mock = AsyncMock()
-    amqp_base.basic_publish = amqp_mock
-
-    config = {
+    smpp_config = {
         'queue_name': 'mock_smpp_connector',
         'connector_name': 'mock_connector',
         'mo_queue_name': 'mock_mo',
         'dlr_queue_name': 'mock_dlr'
     }
-    new_connector = SMPPConnector(config=config, redis=redis_mock)
-    new_connector._amqp_channel = amqp_base
+    new_connector = SMPPConnector(smpp_config=smpp_config, base_config=config, redis=redis_mock, sqs_class=MockSQSManager)
 
-    return new_connector, redis_mock, amqp_mock
+    return new_connector, redis_mock, new_connector._sqs
 
 
 # MO TODO for 100% coverage
@@ -88,12 +78,11 @@ def get_mocked_connector(redis_mock: AIORedisStub = None):
 # multipart mq exception
 
 
-@pytest.mark.asyncio
-async def test_process_mo_short():
+async def test_process_mo_short(get_mocked_connector):
     """
     Tests a standard short MO, non-multipayload
     """
-    connector, redis, amqp = get_mocked_connector()
+    connector, redis, sqs = get_mocked_connector
 
     msg = b'Hello'
 
@@ -137,14 +126,10 @@ async def test_process_mo_short():
     assert redis.call_count == 0
 
     # Should be sent off to MQ
-    assert amqp.mock.call_count == 1
+    queue = sqs._queue_map['mock_mo']
+    assert len(queue) == 1
 
-    call_args = amqp.mock.call_args[1]
-    assert call_args['routing_key'] == 'mock_mo'
-    assert call_args['exchange_name'] == ''
-    assert isinstance(call_args['payload'], str)
-
-    payload = json.loads(call_args['payload'])
+    payload = json.loads(queue[0]['Body'])
 
     assert 'id' in payload
     assert payload['id']
@@ -156,12 +141,11 @@ async def test_process_mo_short():
     assert base64.b64decode(payload['msg']) == mo_pkt_decoded['payload']['short_message']
 
 
-@pytest.mark.asyncio
-async def test_process_mo_sar_long_2parts():
+async def test_process_mo_sar_long_2parts(get_mocked_connector):
     """
     Tests a sar multipart MO
     """
-    connector, redis, amqp = get_mocked_connector()
+    connector, redis, sqs = get_mocked_connector
 
     msg1 = b'Hello'
     msg2 = b' World'
@@ -230,8 +214,8 @@ async def test_process_mo_sar_long_2parts():
     assert len(redis.calls['expire']) == 1
     redis.clear_invocations()
 
-    # Should not be sent to MQ
-    assert amqp.mock.call_count == 0
+    # Should not be sent to MQ (hence no queue created in mock)
+    assert 'mock_mo' not in sqs._queue_map
 
     # Sent 2nd part
     mo_pkt_decoded = pdu.decode_header(payload2)
@@ -245,14 +229,10 @@ async def test_process_mo_sar_long_2parts():
     assert len(redis.calls['hvals']) == 1
 
     # Should be sent off to MQ
-    assert amqp.mock.call_count == 1
+    queue = sqs._queue_map['mock_mo']
+    assert len(queue) == 1
 
-    call_args = amqp.mock.call_args[1]
-    assert call_args['routing_key'] == 'mock_mo'
-    assert call_args['exchange_name'] == ''
-    assert isinstance(call_args['payload'], str)
-
-    payload = json.loads(call_args['payload'])
+    payload = json.loads(queue[0]['Body'])
 
     assert 'id' in payload
     assert payload['id']
@@ -264,12 +244,11 @@ async def test_process_mo_sar_long_2parts():
     assert base64.b64decode(payload['msg']) == msg1 + msg2
 
 
-@pytest.mark.asyncio
-async def test_process_mo_udh_long_2parts():
+async def test_process_mo_udh_long_2parts(get_mocked_connector):
     """
     Tests a sar multipart MO
     """
-    connector, redis, amqp = get_mocked_connector()
+    connector, redis, sqs = get_mocked_connector
     # length info  len  ref  total partno
     # \x05   \x00  \x03 \x01 \x02  \x01
     msg1 = b'\x05\x00\x03\x01\x02\x01Hello'
@@ -330,7 +309,7 @@ async def test_process_mo_udh_long_2parts():
     redis.clear_invocations()
 
     # Should not be sent to MQ
-    assert amqp.mock.call_count == 0
+    assert 'mock_mo' not in sqs._queue_map
 
     # Sent 2nd part
     mo_pkt_decoded = pdu.decode_header(payload2)
@@ -344,14 +323,10 @@ async def test_process_mo_udh_long_2parts():
     assert len(redis.calls['hvals']) == 1
 
     # Should be sent off to MQ
-    assert amqp.mock.call_count == 1
+    queue = sqs._queue_map['mock_mo']
+    assert len(queue) == 1
 
-    call_args = amqp.mock.call_args[1]
-    assert call_args['routing_key'] == 'mock_mo'
-    assert call_args['exchange_name'] == ''
-    assert isinstance(call_args['payload'], str)
-
-    payload = json.loads(call_args['payload'])
+    payload = json.loads(queue[0]['Body'])
 
     assert 'id' in payload
     assert payload['id']
@@ -363,12 +338,11 @@ async def test_process_mo_udh_long_2parts():
     assert base64.b64decode(payload['msg']) == msg1[6:] + msg2[6:]
 
 
-@pytest.mark.asyncio
-async def test_process_mo_udh_long_2parts_missing_one():
+async def test_process_mo_udh_long_2parts_missing_one(get_mocked_connector):
     """
     Tests a sar multipart MO
     """
-    connector, redis, amqp = get_mocked_connector()
+    connector, redis, sqs = get_mocked_connector
     # length info  len  ref  total partno
     # \x05   \x00  \x03 \x01 \x02  \x01
     msg2 = b'\x05\x00\x03\x01\x02\x02 World'
@@ -406,14 +380,10 @@ async def test_process_mo_udh_long_2parts_missing_one():
     assert len(redis.calls['hvals']) == 1
 
     # Should be sent off to MQ
-    assert amqp.mock.call_count == 1
+    queue = sqs._queue_map['mock_mo']
+    assert len(queue) == 1
 
-    call_args = amqp.mock.call_args[1]
-    assert call_args['routing_key'] == 'mock_mo'
-    assert call_args['exchange_name'] == ''
-    assert isinstance(call_args['payload'], str)
-
-    payload = json.loads(call_args['payload'])
+    payload = json.loads(queue[0]['Body'])
 
     assert 'id' in payload
     assert payload['id']
@@ -433,8 +403,7 @@ async def test_process_mo_udh_long_2parts_missing_one():
 # legit
 
 
-@pytest.mark.asyncio
-async def test_process_dlr_success():
+async def test_process_dlr_success(get_mocked_connector):
     """
     Tests a standard short MO, non-multipayload
     """
@@ -443,8 +412,8 @@ async def test_process_dlr_success():
     dlr_method = 'POST'
     dlr_url = 'http://example.org'
 
-    redis = AIORedisStub(data={'testid1': json.dumps({'id': mt_id, 'method': dlr_method, 'url': dlr_url})})
-    connector, redis, amqp = get_mocked_connector(redis_mock=redis)
+    connector, redis, sqs = get_mocked_connector
+    redis._data.update({'testid1': json.dumps({'id': mt_id, 'method': dlr_method, 'url': dlr_url})})
 
     msg_id = 'testid1'
     submit_time = datetime.datetime.now()
@@ -500,14 +469,10 @@ async def test_process_dlr_success():
     assert redis_call_args[0] == 'testid1'
 
     # Should be sent off to MQ
-    assert amqp.mock.call_count == 1
+    queue = sqs._queue_map['mock_dlr']
+    assert len(queue) == 1
 
-    call_args = amqp.mock.call_args[1]
-    assert call_args['routing_key'] == 'mock_dlr'
-    assert call_args['exchange_name'] == ''
-    assert isinstance(call_args['payload'], str)
-
-    payload = json.loads(call_args['payload'])
+    payload = json.loads(queue[0]['Body'])
 
     assert payload['id'] == mt_id
     assert payload['id_smsc'] == msg_id

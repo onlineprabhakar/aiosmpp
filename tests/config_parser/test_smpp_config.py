@@ -1,14 +1,15 @@
 import pytest
 
-from aiosmpp.config import httpapi
+from aiosmpp.config import smpp
 
-HTTPAPI_CONFIG = """[mq]
-host = test
-port = 1234
-vhost = example
-user = user
-password = passwd
-heartbeat_interval = 1
+CONFIG = """[sqs]
+# prefix =
+# endpoint =
+use_fifo_for_sms_queues = true
+# FYI if you do fifo on DLR, you cannot set message timeouts so
+use_fifo_for_dlr = false
+use_fifo_for_mo = false
+region = eu-west-1
 
 [smpp_client]
 url = http://localhost:8081
@@ -50,11 +51,11 @@ regex = ^44.+
 
 def test_config_error():
     with pytest.raises(ValueError):
-        httpapi.HTTPAPIConfig.from_file()
+        smpp.SMPPConfig.from_file()
 
 
 def test_config():
-    config = httpapi.HTTPAPIConfig.from_file(config=HTTPAPI_CONFIG)
+    config = smpp.SMPPConfig.from_file(config=CONFIG)
 
     for name in ('tag_filter1', 'tag_filter2', 'uk_addr'):
         assert name in config.filters
@@ -67,15 +68,11 @@ def test_config():
     assert config.mt_routes['0']['type'] == 'default'
     assert config.mt_routes['0']['connector'] == 'smpp_conn1'
 
-    assert config.mq['host'] == 'test'
-    assert config.mq['vhost'] == 'example'
-    assert config.mq['user'] == 'user'
-    assert config.mq['password'] == 'passwd'
-    assert config.mq['port'] == 1234
+    assert config.mq['region'] == 'eu-west-1'
 
 
 def test_config_reload():
-    config = httpapi.HTTPAPIConfig.from_file(config=HTTPAPI_CONFIG)
+    config = smpp.SMPPConfig.from_file(config=CONFIG)
 
     config.reload()
 
@@ -85,4 +82,4 @@ def test_config_reload():
     for name in ('0', '10', '20'):
         assert name in config.mt_routes
 
-    assert config.mq['host'] == 'test'
+    assert config.mq['region'] == 'eu-west-1'

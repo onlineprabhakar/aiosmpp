@@ -95,7 +95,7 @@ class SMPPConfig(object):
             elif section.startswith('mt_interceptor:'):
                 self._add_mt_interceptor(section)
             else:
-                self.logger.warning('Unknown section: {0}'.format(section))
+                self.logger.debug('Unknown section: {0}'.format(section))
 
         # Get Redis settings
         self.redis = {
@@ -204,7 +204,7 @@ class SMPPConfig(object):
             reload_func = lambda: cls.from_file(filepath)
         elif config:
             parser.read_string(config)
-            reload_func = lambda: cls.from_file(config=filepath)
+            reload_func = lambda: cls.from_file(config=config)
         else:
             raise ValueError('filepath or config argument must be provided')
 

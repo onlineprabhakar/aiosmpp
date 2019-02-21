@@ -30,5 +30,5 @@ def process(event: dict, logger: logging.Logger) -> dict:
     lock_pdu_param(event, 'source_addr_npi')
     lock_pdu_param(event, 'source_addr_ton')
 
-    logger.info('Interceptor: {0}'.format(event))
+    # logger.info('Interceptor: {0}'.format(event))
     return event

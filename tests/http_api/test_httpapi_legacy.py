@@ -1,91 +1,22 @@
 import binascii
-import asyncio
 import json
 
-import pytest
-
-import multidict
-from aiosmpp.config.httpapi import HTTPAPIConfig
+from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.httpapi.server import WebHandler
-from aiosmpp.smppmanager.client import SMPPManagerClient
+from aiosmpp.sqs import MockSQSManager
 
 
-SMPP_CLIENT_RESPONSE = {
-    "connectors": {
-        "smpp_conn1": {
-            "state": "BOUND_TRX",
-            "config": {
-                "connector_name": "smpp_conn1",
-                "host": "127.0.10.1",
-                "port": 2775,
-                "bind_type": "TRX",
-                "ssl": False,
-                "systemid": "test1",
-                "password": "testpw",
-                "conn_loss_retry": True,
-                "conn_loss_delay": 30,
-                "priority_flag": 0,
-                "submit_throughput": 50,
-                "coding": 0,
-                "enquire_link_interval": 30,
-                "replace_if_present_flag": 0,
-                "protocol_id": None,
-                "validity_period": None,
-                "service_type": None,
-                "addr_range": None,
-                "source_addr_ton": 1,
-                "source_addr_npi": 1,
-                "dest_addr_ton": 1,
-                "dest_addr_npi": 1,
-                "bind_ton": 0,
-                "bind_npi": 1,
-                "sm_default_msg_id": 0,
-                "dlr_msgid": 0,
-                "dlr_expiry": 86400,
-                "requeue_delay": 120,
-                "queue_name": "smpp_smpp_conn1",
-                "dlr_queue_name": "dlr",
-                "mo_queue_name": "mo",
-                "mq": {
-                    "host": "127.0.0.1",
-                    "port": 5672,
-                    "vhost": "/",
-                    "user": "guest",
-                    "password": "guest",
-                    "heartbeat_interval": 30
-                }
-            }
-        }
-    }
-}
+def get_app(conf_data: bytes):
+    config = SMPPConfig.from_file(config=conf_data.decode())
+    handler = WebHandler(config=config, sqs_manager=MockSQSManager)
+
+    return handler
 
 
-class SMPPClientManager(SMPPManagerClient):
-    def __init__(self, *args, **kwargs):
-        super(SMPPClientManager, self).__init__(*args, **kwargs)
-        self.connectors = SMPP_CLIENT_RESPONSE
+async def test_legacy_missing_param(aiohttp_client, get_resource):
+    handler = get_app(get_resource('smpp.conf'))
+    sqs = handler._sqs
 
-    async def close(self):
-        pass
-
-    async def run(self, interval: int = 120):
-        try:
-            while True:
-                await asyncio.sleep(0.2)
-        except:
-            pass
-
-
-def get_app():
-    config = HTTPAPIConfig.from_file(config=HTTPAPI_CONFIG)
-    mock = AMQPMock()
-    handler = WebHandler(config=config, amqp_connect=mock, smppmanagerclientclass=SMPPClientManager)
-
-    return mock, handler
-
-
-async def test_legacy_missing_param(aiohttp_client):
-    amqp_mock, handler = get_app()
     client = await aiohttp_client(handler.app())
 
     # Wont match smpp conn 2 or 3, so should be smpp_conn1
@@ -102,11 +33,15 @@ async def test_legacy_missing_param(aiohttp_client):
     assert 'Error "' in text
 
 
-async def test_legacy_no_route(aiohttp_client):
-    amqp_mock, handler = get_app()
+async def test_legacy_no_route(aiohttp_client, get_resource):
+    handler = get_app(get_resource('smpp.conf'))
+    sqs = handler._sqs
+
     client = await aiohttp_client(handler.app())
 
-    # Wont match smpp conn 2 or 3, so should be smpp_conn1
+    # Remove all routes
+    handler.route_table.routes.clear()
+
     payload = {
         'content': '£ test',
         'to': '447428555555',
@@ -123,8 +58,10 @@ async def test_legacy_no_route(aiohttp_client):
     assert text == 'Error "No route found"'
 
 
-async def test_legacy_send_gsm7(aiohttp_client):
-    amqp_mock, handler = get_app()
+async def test_legacy_send_gsm7(aiohttp_client, get_resource):
+    handler = get_app(get_resource('smpp.conf'))
+    sqs = handler._sqs
+
     client = await aiohttp_client(handler.app())
 
     # Wont match smpp conn 2 or 3, so should be smpp_conn1
@@ -141,22 +78,20 @@ async def test_legacy_send_gsm7(aiohttp_client):
     assert resp.status == 200
     text = await resp.text()  # should look like 'Success "random-uuid"'
 
-    assert amqp_mock.channels
-    amqp_channel = amqp_mock.channels[0]
-    assert amqp_channel.calls
-    call = amqp_channel.calls[0]
+    assert sqs._queue_map
+    queue = list(sqs._queue_map.values())[0]
+    assert queue
+    queue_msg = queue[0]
 
     # Check amqp data
-    amqp_payload = json.loads(call['payload'])
-    assert call['routing_key'] == 'smpp_smpp_conn1'
-    assert call['exchange_name'] == ''
+    sqs_payload = json.loads(queue_msg['Body'])
 
-    assert 'Success "{0}"'.format(amqp_payload['req_id']) in text
+    assert 'Success "{0}"'.format(sqs_payload['req_id']) in text
 
-    assert amqp_payload['connector'] == 'smpp_conn1'
-    assert len(amqp_payload['pdus']) == 1
+    assert sqs_payload['connector'] == 'smpp_conn1'
+    assert len(sqs_payload['pdus']) == 1
 
-    pdu = amqp_payload['pdus'][0]
+    pdu = sqs_payload['pdus'][0]
     # Spot check some pdu values
     assert pdu['source_addr'] == '447428666666'
     assert pdu['destination_addr'] == '447428555555'
@@ -165,8 +100,10 @@ async def test_legacy_send_gsm7(aiohttp_client):
     assert pdu['sm_default_msg_id'] == 0
 
 
-async def test_legacy_send_latin1(aiohttp_client):
-    amqp_mock, handler = get_app()
+async def test_legacy_send_latin1(aiohttp_client, get_resource):
+    handler = get_app(get_resource('smpp.conf'))
+    sqs = handler._sqs
+
     client = await aiohttp_client(handler.app())
 
     # Wont match smpp conn 2 or 3, so should be smpp_conn1
@@ -183,22 +120,20 @@ async def test_legacy_send_latin1(aiohttp_client):
     assert resp.status == 200
     text = await resp.text()  # should look like 'Success "random-uuid"'
 
-    assert amqp_mock.channels
-    amqp_channel = amqp_mock.channels[0]
-    assert amqp_channel.calls
-    call = amqp_channel.calls[0]
+    assert sqs._queue_map
+    queue = list(sqs._queue_map.values())[0]
+    assert queue
+    queue_msg = queue[0]
 
     # Check amqp data
-    amqp_payload = json.loads(call['payload'])
-    assert call['routing_key'] == 'smpp_smpp_conn1'
-    assert call['exchange_name'] == ''
+    sqs_payload = json.loads(queue_msg['Body'])
 
-    assert 'Success "{0}"'.format(amqp_payload['req_id']) in text
+    assert 'Success "{0}"'.format(sqs_payload['req_id']) in text
 
-    assert amqp_payload['connector'] == 'smpp_conn1'
-    assert len(amqp_payload['pdus']) == 1
+    assert sqs_payload['connector'] == 'smpp_conn1'
+    assert len(sqs_payload['pdus']) == 1
 
-    pdu = amqp_payload['pdus'][0]
+    pdu = sqs_payload['pdus'][0]
     # Spot check some pdu values
     assert pdu['source_addr'] == '447428666666'
     assert pdu['destination_addr'] == '447428555555'
@@ -207,8 +142,10 @@ async def test_legacy_send_latin1(aiohttp_client):
     assert pdu['sm_default_msg_id'] == 0
 
 
-async def test_legacy_send_ucs2(aiohttp_client):
-    amqp_mock, handler = get_app()
+async def test_legacy_send_ucs2(aiohttp_client, get_resource):
+    handler = get_app(get_resource('smpp.conf'))
+    sqs = handler._sqs
+
     client = await aiohttp_client(handler.app())
 
     # Wont match smpp conn 2 or 3, so should be smpp_conn1
@@ -227,22 +164,20 @@ async def test_legacy_send_ucs2(aiohttp_client):
     assert resp.status == 200
     text = await resp.text()  # should look like 'Success "random-uuid"'
 
-    assert amqp_mock.channels
-    amqp_channel = amqp_mock.channels[0]
-    assert amqp_channel.calls
-    call = amqp_channel.calls[0]
+    assert sqs._queue_map
+    queue = list(sqs._queue_map.values())[0]
+    assert queue
+    queue_msg = queue[0]
 
     # Check amqp data
-    amqp_payload = json.loads(call['payload'])
-    assert call['routing_key'] == 'smpp_smpp_conn1'
-    assert call['exchange_name'] == ''
+    sqs_payload = json.loads(queue_msg['Body'])
 
-    assert 'Success "{0}"'.format(amqp_payload['req_id']) in text
+    assert 'Success "{0}"'.format(sqs_payload['req_id']) in text
 
-    assert amqp_payload['connector'] == 'smpp_conn1'
-    assert len(amqp_payload['pdus']) == 1
+    assert sqs_payload['connector'] == 'smpp_conn1'
+    assert len(sqs_payload['pdus']) == 1
 
-    pdu = amqp_payload['pdus'][0]
+    pdu = sqs_payload['pdus'][0]
     # Spot check some pdu values
     assert pdu['source_addr'] == '447428666666'
     assert pdu['destination_addr'] == '447428555555'
@@ -251,8 +186,10 @@ async def test_legacy_send_ucs2(aiohttp_client):
     assert pdu['sm_default_msg_id'] == 0
 
 
-async def test_legacy_send_gsm7_long(aiohttp_client):
-    amqp_mock, handler = get_app()
+async def test_legacy_send_gsm7_long(aiohttp_client, get_resource):
+    handler = get_app(get_resource('smpp.conf'))
+    sqs = handler._sqs
+
     client = await aiohttp_client(handler.app())
 
     # Wont match smpp conn 2 or 3, so should be smpp_conn1
@@ -270,22 +207,20 @@ async def test_legacy_send_gsm7_long(aiohttp_client):
     assert resp.status == 200
     text = await resp.text()  # should look like 'Success "random-uuid"'
 
-    assert amqp_mock.channels
-    amqp_channel = amqp_mock.channels[0]
-    assert amqp_channel.calls
-    call = amqp_channel.calls[0]
+    assert sqs._queue_map
+    queue = list(sqs._queue_map.values())[0]
+    assert queue
+    queue_msg = queue[0]
 
     # Check amqp data
-    amqp_payload = json.loads(call['payload'])
-    assert call['routing_key'] == 'smpp_smpp_conn1'
-    assert call['exchange_name'] == ''
+    sqs_payload = json.loads(queue_msg['Body'])
 
-    assert 'Success "{0}"'.format(amqp_payload['req_id']) in text
+    assert 'Success "{0}"'.format(sqs_payload['req_id']) in text
 
-    assert amqp_payload['connector'] == 'smpp_conn1'
-    assert len(amqp_payload['pdus']) == 2
+    assert sqs_payload['connector'] == 'smpp_conn1'
+    assert len(sqs_payload['pdus']) == 2
 
-    pdu = amqp_payload['pdus'][0]
+    pdu = sqs_payload['pdus'][0]
     # Spot check some pdu values
     assert pdu['source_addr'] == '447428666666'
     assert pdu['destination_addr'] == '447428555555'
@@ -296,7 +231,7 @@ async def test_legacy_send_gsm7_long(aiohttp_client):
     # udh 5 0 3, 1 2 1 # ref 1, parts 2, no 1
     assert pdu['short_message_hex'].startswith('050003010201')
 
-    pdu = amqp_payload['pdus'][1]
+    pdu = sqs_payload['pdus'][1]
     # Spot check some pdu values
     assert pdu['source_addr'] == '447428666666'
     assert pdu['destination_addr'] == '447428555555'

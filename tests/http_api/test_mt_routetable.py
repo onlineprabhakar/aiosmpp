@@ -2,17 +2,40 @@ from typing import Dict, Any
 
 import pytest
 
-from aiosmpp.config.httpapi import HTTPAPIConfig
-from aiosmpp.httpapi.routetable import RouteTable
+from aiosmpp.config.smpp import SMPPConfig
+from aiosmpp.httpapi.routetable import MTRouteTable
 
 
-HTTPAPI_CONFIG = """[mq]
-host = test
-port = 1234
-vhost = example
-user = user
-password = passwd
-heartbeat_interval = 1
+HTTPAPI_CONFIG = """[sqs]
+use_fifo_for_sms_queues = true
+# FYI if you do fifo on DLR, you cannot set message timeouts so
+use_fifo_for_dlr = false
+use_fifo_for_mo = false
+region = eu-west-1
+
+[smpp_bind:smpp_conn1]
+host = 127.0.10.1
+port = 2775
+bind_type = TRX
+ssl = no
+systemid = test1
+password = testpw
+
+[smpp_bind:smpp_conn2]
+host = 127.0.10.1
+port = 2775
+bind_type = TRX
+ssl = no
+systemid = test1
+password = testpw
+
+[smpp_bind:smpp_conn3]
+host = 127.0.10.1
+port = 2775
+bind_type = TRX
+ssl = no
+systemid = test1
+password = testpw
 
 [smpp_client]
 url = http://localhost:8081
@@ -108,18 +131,11 @@ MT_EVENT3 = {
 
 
 @pytest.fixture(scope='function')
-def connector_dict() -> Dict[str, Any]:
-    connector_dict = {'connectors': {}}
+def route_table() -> MTRouteTable:
 
-    return connector_dict
+    config = SMPPConfig.from_file(config=HTTPAPI_CONFIG)
 
-
-@pytest.fixture(scope='function')
-def route_table(connector_dict) -> RouteTable:
-
-    config = HTTPAPIConfig.from_file(config=HTTPAPI_CONFIG)
-
-    rt = RouteTable(config, route_attr='mt_routes', connector_dict=connector_dict)
+    rt = MTRouteTable(config, route_attr='mt_routes')
 
     return rt
 
@@ -132,11 +148,7 @@ def test_route_order(route_table):
     assert route_numbers == route_numbers_sorted
 
 
-def test_route_skip_to_defult(connector_dict, route_table):
-    connector_dict['connectors']['smpp_conn3'] = SMPP_OBJ1
-    connector_dict['connectors']['smpp_conn2'] = SMPP_OBJ1
-    connector_dict['connectors']['smpp_conn1'] = SMPP_OBJ1
-
+def test_route_skip_to_defult(route_table):
     # MT_EVENT1 doesnt have tag 1337, or tag 666
     connector = route_table.evaluate(MT_EVENT1)
 
@@ -144,22 +156,7 @@ def test_route_skip_to_defult(connector_dict, route_table):
     assert connector.name == 'smpp_conn1'
 
 
-def test_route_skip_to_defult_unbound(connector_dict, route_table):
-    connector_dict['connectors']['smpp_conn3'] = SMPP_OBJ1
-    connector_dict['connectors']['smpp_conn2'] = SMPP_OBJ1
-    connector_dict['connectors']['smpp_conn1'] = SMPP_OBJ2
-
-    # MT_EVENT1 doesnt have tag 1337, or tag 666
-    connector = route_table.evaluate(MT_EVENT1)
-
-    assert connector is None
-
-
-def test_route_1(connector_dict, route_table):
-    connector_dict['connectors']['smpp_conn3'] = SMPP_OBJ1
-    connector_dict['connectors']['smpp_conn2'] = SMPP_OBJ1
-    connector_dict['connectors']['smpp_conn1'] = SMPP_OBJ1
-
+def test_route_1(route_table):
     # MT_EVENT1 doesnt have tag 1337, or tag 666
     connector = route_table.evaluate(MT_EVENT2)
 
@@ -167,11 +164,7 @@ def test_route_1(connector_dict, route_table):
     assert connector.name == 'smpp_conn3'
 
 
-def test_route_2(connector_dict, route_table):
-    connector_dict['connectors']['smpp_conn3'] = SMPP_OBJ1
-    connector_dict['connectors']['smpp_conn2'] = SMPP_OBJ1
-    connector_dict['connectors']['smpp_conn1'] = SMPP_OBJ1
-
+def test_route_2(route_table):
     # MT_EVENT1 doesnt have tag 1337, or tag 666
     connector = route_table.evaluate(MT_EVENT3)
 
@@ -179,11 +172,7 @@ def test_route_2(connector_dict, route_table):
     assert connector.name == 'smpp_conn2'
 
 
-def test_route_skip_to_defult_missing(connector_dict, route_table):
-    connector_dict['connectors']['smpp_conn3'] = SMPP_OBJ1
-    connector_dict['connectors']['smpp_conn2'] = SMPP_OBJ1
-    connector_dict['connectors']['smpp_conn1'] = SMPP_OBJ2
-
+def test_route_skip_to_defult_missing(route_table):
     # Remove default route
     route_table.routes.pop(-1)
 
