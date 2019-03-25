@@ -1,20 +1,19 @@
 #!/bin/sh
 
-service="$1"
+service="$1"; shift
 
 if [ -z "${service}" ]; then
-    echo "Service parameter missing"
+    echo "\"service\" parameter missing"
     exit 1
 fi
 
 case "${service}" in
-smppserver)
+smppmanager)
     echo "Running SMPP Server"
-    exec /usr/binpython3 "${@:2}"
+    exec /usr/bin/python3 -m aiosmpp.smppmanager.server "${@}"
     ;;
 *)
     echo "Unknown argument"
     exit 1
     ;;
 esac
-

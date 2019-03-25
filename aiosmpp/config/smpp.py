@@ -5,6 +5,8 @@ import string
 from typing import Callable, Optional, Tuple, Dict, Any
 
 from aiosmpp import constants as c
+from aiosmpp.utils import s3_url_parse
+import aioboto3
 
 
 def _try_format(value: Any, func, default: Any = None, warn_str: str = None, allow_none: bool = False, logger: logging.Logger = None):
@@ -196,10 +198,30 @@ class SMPPConfig(object):
 
         return name, data
 
+    @staticmethod
+    async def _get_from_s3(filepath) -> str:
+        # TODO error logging
+        bucket, key = s3_url_parse(filepath)
+
+        async with aioboto3.client('s3', region_name='us-east-1') as s3_client:
+            resp = await s3_client.get_bucket_location(Bucket=bucket)
+            bucket_region = resp.get('LocationConstraint')
+
+        if not bucket_region:
+            bucket_region = 'us-east-1'
+
+        async with aioboto3.client('s3', region_name=bucket_region) as s3_client:
+            resp = await s3_client.get_object(Bucket=bucket, Key=key)
+            binary = await resp['Body'].read()
+            return binary.decode()
+
     @classmethod
     async def from_file(cls, filepath: str = None, config: str = None, logger: Optional[logging.Logger] = None):
         parser = configparser.ConfigParser()
-        if filepath:
+        if filepath and filepath.startswith('s3:/'):
+            parser.read_string(await cls._get_from_s3(filepath))
+            reload_func = lambda: cls.from_file(filepath)
+        elif filepath:
             parser.read(filepath)
             reload_func = lambda: cls.from_file(filepath)
         elif config:
