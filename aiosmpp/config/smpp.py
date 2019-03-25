@@ -212,7 +212,8 @@ class SMPPConfig(object):
 
         async with aioboto3.client('s3', region_name=bucket_region) as s3_client:
             resp = await s3_client.get_object(Bucket=bucket, Key=key)
-            return await resp['Body'].read()
+            binary = await resp['Body'].read()
+            return binary.decode()
 
     @classmethod
     async def from_file(cls, filepath: str = None, config: str = None, logger: Optional[logging.Logger] = None):
