@@ -182,7 +182,7 @@ async def main():
             print('Path "{0}" does not exist, exiting'.format(filepath))
             sys.exit(1)
 
-        config = SMPPConfig.from_file(filepath, logger=conf_logger)
+        config = await SMPPConfig.from_file(filepath, logger=conf_logger)
 
     dlr_poster = DLRPoster(config, logger)
     await dlr_poster.setup()

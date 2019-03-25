@@ -600,7 +600,7 @@ async def main():
             print('Path "{0}" does not exist, exiting'.format(filepath))
             sys.exit(1)
 
-        config = SMPPConfig.from_file(filepath)
+        config = await SMPPConfig.from_file(filepath)
 
     print('Starting SMPP Manager')
     smpp_mgmr = SMPPManager(config=config)
