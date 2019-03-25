@@ -1,5 +1,6 @@
 import re
-from typing import Union, Dict
+from urllib.parse import urlparse
+from typing import Union, Dict, Tuple
 
 GSM_CHARS = ("@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>"
              "?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà")
@@ -69,3 +70,9 @@ def parse_dlr_text(dlr_text: Union[str, bytes]) -> Union[Dict[str, str], None]:
     if 'id' in result and 'stat' in result:
         return result
     return None
+
+
+def s3_url_parse(url: str) -> Tuple[str, str]:
+    result = urlparse(url)
+
+    return result.netloc, result.path.lstrip('/')
