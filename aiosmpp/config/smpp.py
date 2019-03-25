@@ -197,7 +197,7 @@ class SMPPConfig(object):
         return name, data
 
     @classmethod
-    def from_file(cls, filepath: str = None, config: str = None, logger: Optional[logging.Logger] = None):
+    async def from_file(cls, filepath: str = None, config: str = None, logger: Optional[logging.Logger] = None):
         parser = configparser.ConfigParser()
         if filepath:
             parser.read(filepath)
@@ -210,7 +210,7 @@ class SMPPConfig(object):
 
         return cls(parser, reload_func, logger=logger)
 
-    def reload(self):
-        new_obj = self._reload_func()
+    async def reload(self):
+        new_obj = await self._reload_func()
         self._config = new_obj._config
         self._read_config()

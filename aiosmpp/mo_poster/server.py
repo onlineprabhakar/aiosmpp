@@ -184,7 +184,7 @@ async def main():
             print('Path "{0}" does not exist, exiting'.format(filepath))
             sys.exit(1)
 
-        config = SMPPConfig.from_file(filepath, logger=conf_logger)
+        config = await SMPPConfig.from_file(filepath, logger=conf_logger)
 
     mo_poster = MOPoster(config, logger)
     await mo_poster.setup()

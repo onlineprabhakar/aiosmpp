@@ -1,3 +1,4 @@
+import asyncio
 import argparse
 import logging
 import os
@@ -38,7 +39,7 @@ def app(argv: list = None) -> web.Application:
             print('Path "{0}" does not exist, exiting'.format(filepath))
             sys.exit(1)
 
-        config = SMPPConfig.from_file(filepath)
+        config = asyncio.get_event_loop().run_until_complete(SMPPConfig.from_file(filepath))
 
     print('Initialising SMPP Manager')
     smpp_manager = SMPPManager(config=config, logger=manager_logger)

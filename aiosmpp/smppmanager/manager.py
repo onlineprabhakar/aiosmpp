@@ -6,6 +6,7 @@ import json
 import pickle
 import os
 import sys
+import ssl as _ssl
 import uuid
 from typing import Optional, Dict, Tuple, Any, List, Type
 
@@ -39,6 +40,14 @@ class SMPPConnector(object):
         self.config = smpp_config
         self._all_config = base_config
         self._smpp_proto: SMPPClientProtocol = None
+
+        self._ssl_ctx = None
+        if smpp_config['ssl']:
+            self._ssl_ctx = _ssl.SSLContext(protocol=_ssl.PROTOCOL_TLS)
+            self._ssl_ctx.verify_mode = _ssl.CERT_NONE
+            # Yeah i dont like this but for now it'll do
+            self._ssl_ctx.check_hostname = False
+            self._ssl_ctx.load_verify_locations()
 
         self.logger = logger
         if not logger:
@@ -253,7 +262,8 @@ class SMPPConnector(object):
                     lambda: SMPPClientProtocol(config=self.config, loop=self._loop,
                                                logger=logging.getLogger(logger_name)),
                     self.config['host'],
-                    self.config['port']
+                    self.config['port'],
+                    ssl=self._ssl_ctx
                 )
 
                 self._smpp_proto: SMPPClientProtocol = conn
@@ -590,7 +600,7 @@ async def main():
             print('Path "{0}" does not exist, exiting'.format(filepath))
             sys.exit(1)
 
-        config = SMPPConfig.from_file(filepath)
+        config = await SMPPConfig.from_file(filepath)
 
     print('Starting SMPP Manager')
     smpp_mgmr = SMPPManager(config=config)
