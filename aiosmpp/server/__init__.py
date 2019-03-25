@@ -3,7 +3,9 @@ import asyncio
 import enum
 import logging
 import uuid
-from typing import Dict, Any, Type
+import ssl as _ssl
+import sys
+from typing import Dict, Any, Type, Optional
 
 from aiosmpp import pdu, log
 
@@ -170,12 +172,12 @@ class RawSMPPServer(asyncio.Protocol):
 
 def run_server(address: str = '0.0.0.0', port: int = 2775,
                smpp_class: Type[RawSMPPServer] = RawSMPPServer,
-               verbose: bool = False):
+               verbose: bool = False, ssl: Optional[_ssl.SSLContext] = None):
     log_level = logging.DEBUG if verbose else logging.INFO
     logger = log.get_stdout_logger('server', log_level)
 
     loop = asyncio.get_event_loop()
-    server_coro = loop.create_server(lambda: smpp_class(logger=logger), address, port)
+    server_coro = loop.create_server(lambda: smpp_class(logger=logger), address, port, ssl=sslctx)
     server = loop.run_until_complete(server_coro)
 
     # Serve requests until Ctrl+C is pressed
@@ -197,8 +199,22 @@ def get_args() -> Dict[str, Any]:
     parser.add_argument('--port', default=2775, type=int, help='Port to listen on')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose mode')
 
+    # SSL
+    parser.add_argument('--ssl-cert', help='SSL Cert')
+    parser.add_argument('--ssl-key', help='SSL Key')
+
     args = parser.parse_args()
-    return {'address': args.address, 'port': args.port, 'verbose': args.verbose}
+
+    result = {'address': args.address, 'port': args.port, 'verbose': args.verbose}
+
+    if (args.ssl_cert and not args.ssl_key) or (args.ssl_key and not args.ssl_cert):
+        print('SSL Cert and Key required', file=sys.stderr)
+    if args.ssl_cert and args.ssl_key:
+        ctx = _ssl.SSLContext(protocol=_ssl.PROTOCOL_TLS)
+        ctx.load_cert_chain(args.ssl_cert, args.ssl_key)
+        result['ssl'] = ctx
+
+    return result
 
 
 if __name__ == '__main__':
