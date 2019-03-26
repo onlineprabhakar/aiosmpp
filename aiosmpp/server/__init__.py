@@ -177,7 +177,7 @@ def run_server(address: str = '0.0.0.0', port: int = 2775,
     logger = log.get_stdout_logger('server', log_level)
 
     loop = asyncio.get_event_loop()
-    server_coro = loop.create_server(lambda: smpp_class(logger=logger), address, port, ssl=sslctx)
+    server_coro = loop.create_server(lambda: smpp_class(logger=logger), address, port, ssl=ssl)
     server = loop.run_until_complete(server_coro)
 
     # Serve requests until Ctrl+C is pressed
