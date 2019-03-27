@@ -1,25 +1,25 @@
 import asyncio
 import logging
 import datetime
+import os
+from urllib.parse import urlparse
 from typing import Dict, Any, Union, Optional
 
 import aiohttp
+import aioboto3
+from botocore.config import Config
 
 from aiosmpp.httpapi.routetable import MTRouteTable
 
 
-# /api/v1/smpp/connections
-
-
 class SMPPManagerClient(object):
-    def __init__(self, url: str, route_table: MTRouteTable, timeout=0.5, logger: Optional[logging.Logger] = None):
+    def __init__(self, url: str, region:str, route_table: MTRouteTable, timeout=0.5, logger: Optional[logging.Logger] = None):
         self.url = url
+        self.region = region
         self.timeout = timeout
         self.logger = logger
         if not logger:
             self.logger = logging.getLogger()
-
-        # TODO here if scheme is ecs
 
         self._route_table = route_table
 
@@ -36,7 +36,7 @@ class SMPPManagerClient(object):
         except:  # noqa: E722
             pass
 
-    async def get_connectors(self) -> Union[Dict[str, Any], None]:
+    async def _get_connectors_normal_url(self) -> Union[Dict[str, Any], None]:
         url = self.url + '/api/v1/smpp/connectors'
 
         try:
@@ -54,6 +54,99 @@ class SMPPManagerClient(object):
             self.logger.exception('get connectors err', exc_info=err)
 
         return None
+
+    async def _get_connectors_ecs(self) -> Union[Dict[str, Any], None]:
+        url = urlparse(self.url)
+        cluster = url.netloc
+        service = url.path.lstrip('/')
+
+        result = None
+
+        try:
+            config = None
+            if 'HTTPS_PROXY' in os.environ:
+                config = Config(proxies={'HTTPS': os.environ['HTTPS_PROXY'].replace('https', 'http', 1)})
+
+            self.logger.info('Getting tasks for {0}:{1}'.format(cluster, service))
+            async with aioboto3.client('ecs', region_name=self.region, config=config) as ecs_client:
+
+                resp = await ecs_client.list_tasks(cluster=cluster, serviceName=service, desiredStatus='RUNNING')
+                task_arns = resp['taskArns']
+
+                resp = await ecs_client.describe_tasks(cluster=cluster, tasks=task_arns)
+                tasks = []
+
+                for task in resp['tasks']:
+                    # Bit ugly but will do for now
+                    container = task['containers'][0]
+                    container_instance = task['containerInstanceArn']
+                    port = [bind for bind in container['networkBindings'] if bind['hostPort'] == 8081][0]['hostPort']
+
+                    tasks.append((container_instance, port))
+
+                # Tasks contain [(container instance arn, port), ...]
+                container_instances = {}
+
+                resp = await ecs_client.describe_container_instances(
+                    cluster=cluster,
+                    containerInstances=list(set([x[0] for x in tasks]))
+                )
+                for instance in resp.get('containerInstances', []):
+                    container_instances[instance['ec2InstanceId']] = instance['containerInstanceArn']
+
+            container_instance_to_ip = {}
+
+            async with aioboto3.client('ec2', region_name=self.region, config=config) as ec2_client:
+                resp = await ec2_client.describe_instances(InstanceIds=list(container_instances.keys()))
+
+                for reservation in resp['Reservations']:
+                    for instance in reservation['Instances']:
+                        container_instance = container_instances[instance['InstanceId']]
+
+                        container_instance_to_ip[container_instance] = instance['PrivateIpAddress']
+
+            # So we've got the container instances that the tasks run on
+            # We've converted the container instances to real instances
+            # We've got a mapping of container instance 2 ip
+            connectors = {}
+
+            for container_instance_arn, port in tasks:
+                ip = container_instance_to_ip[container_instance_arn]
+                url = 'http://{0}:{1}/api/v1/smpp/connectors'.format(ip, port)
+
+                try:
+                    async with self.get_session().get(url) as resp:
+                        json_data = await resp.json()
+                    # {'connectors': {}}
+                    self.logger.info('Url: {0} returned {1}'.format(url, json_data))
+                    # TODO only update if status is better, as otherwise we could replace running with down
+                    connectors.update(json_data['connectors'])
+                except asyncio.TimeoutError:
+                    pass
+                except asyncio.CancelledError:
+                    raise
+                except (ConnectionRefusedError, aiohttp.client_exceptions.ClientConnectorError):
+                    self.logger.error('Connection refused to {0}'.format(url))
+                except Exception as err:
+                    self.logger.exception('get connectors err', exc_info=err)
+
+            # Now we have connectors in connectors
+            return {'connectors': connectors}
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            self.logger.exception('get ecs connectors err', exc_info=err)
+
+        return result
+
+    async def get_connectors(self) -> Union[Dict[str, Any], None]:
+        if self.url.startswith('ecs'):
+            result = await self._get_connectors_ecs()
+        else:
+            result = await self._get_connectors_normal_url()
+
+        return result
 
     async def run(self, interval: int = 120):
         while True:

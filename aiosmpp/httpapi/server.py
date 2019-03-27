@@ -75,7 +75,10 @@ class WebHandler(object):
         self.route_table = MTRouteTable(config)
 
         # TODO find smppmanager / put autodiscovery in the class
-        self.smpp_manager_client = smppmanagerclientclass(self.config.smpp_client_url, route_table=self.route_table, logger=self.logger)
+        self.smpp_manager_client = smppmanagerclientclass(
+            self.config.smpp_client_url,
+            self.config.smpp_client_region,
+            route_table=self.route_table, logger=self.logger)
         self.smpp_manager_client_loop = asyncio.ensure_future(self.smpp_manager_client.run(interval=120), loop=self.loop)
 
     @property

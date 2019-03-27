@@ -81,6 +81,7 @@ class SMPPConfig(object):
         self.mo_queue = self.mq['name_prefix'] + c.MO_QUEUE + ('.fifo' if self.mq['use_fifo_for_mo'] else '')
 
         self.smpp_client_url = self._config.get('smpp_client', 'url')
+        self.smpp_client_region = self._config.get('smpp_client', 'region', fallback='us-east-1')
 
         for section in self._config.sections():
 
