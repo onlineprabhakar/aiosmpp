@@ -12,6 +12,10 @@ smppmanager)
     echo "Running SMPP Server"
     exec /usr/bin/python3 -m aiosmpp.smppmanager.server "${@}"
     ;;
+httpapi)
+    echo "Running HTTP Server"
+    exec /usr/bin/python3 -m aiosmpp.httpapi.server "${@}"
+    ;;
 *)
     echo "Unknown argument"
     exit 1

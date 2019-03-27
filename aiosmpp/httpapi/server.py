@@ -505,10 +505,12 @@ def app(argv: list = None) -> web.Application:
     elif getattr(args, 'config.dynamodb.table'):
         raise NotImplementedError()
     elif getattr(args, 'config.file'):
-        filepath = os.path.expanduser(getattr(args, 'config.file'))
-        if not os.path.exists(filepath):
-            print('Path "{0}" does not exist, exiting'.format(filepath))
-            sys.exit(1)
+        filepath = getattr(args, 'config.file')
+        if not filepath.startswith('s3'):
+            filepath = os.path.expanduser(filepath)
+            if not os.path.exists(filepath):
+                print('Path "{0}" does not exist, exiting'.format(filepath))
+                sys.exit(1)
 
         config = asyncio.get_event_loop().run_until_complete(
             SMPPConfig.from_file(filepath, logger=conf_logger)

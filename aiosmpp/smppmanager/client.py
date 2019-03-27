@@ -80,7 +80,7 @@ class SMPPManagerClient(object):
                     # Bit ugly but will do for now
                     container = task['containers'][0]
                     container_instance = task['containerInstanceArn']
-                    port = [bind for bind in container['networkBindings'] if bind['hostPort'] == 8081][0]['hostPort']
+                    port = [bind for bind in container['networkBindings'] if bind['containerPort'] == 8081][0]['hostPort']
 
                     tasks.append((container_instance, port))
 
@@ -118,9 +118,15 @@ class SMPPManagerClient(object):
                     async with self.get_session().get(url) as resp:
                         json_data = await resp.json()
                     # {'connectors': {}}
-                    self.logger.info('Url: {0} returned {1}'.format(url, json_data))
-                    # TODO only update if status is better, as otherwise we could replace running with down
-                    connectors.update(json_data['connectors'])
+                    self.logger.info('Hit ECS Url: {0} got {1}'.format(url, resp.status))
+                    for connector, state in json_data.get('connectors', {}).items():
+                        # Update if connection not in dict
+                        if connector not in connectors:
+                            connectors[connector] = state
+                        # Update if connector in dict but not bound
+                        elif not connectors[connector].startswith('BOUND'):
+                            connectors[connector] = state
+
                 except asyncio.TimeoutError:
                     pass
                 except asyncio.CancelledError:
