@@ -10,10 +10,18 @@ with open('README.rst') as readme_file:
 
 
 requirements = [
-    'aiohttp==3.5.4',
-    'aioboto3==6.2.2',
-    'aioredis==1.2.0'
+
 ]
+
+extra_require = {
+    'framework': [
+        'aiohttp==3.5.4',
+        'aioboto3==6.2.2',
+        'aioredis==1.2.0',
+        'aioprometheus==18.7.1',
+        'aiohttp-sentry==0.5.0'
+    ]
+}
 
 test_requirements = [
     'pytest',
@@ -45,5 +53,6 @@ setup(
         'Programming Language :: Python :: 3.7',
     ],
     test_suite='tests',
-    tests_require=test_requirements
+    tests_require=test_requirements,
+    extras_require=extra_require
 )

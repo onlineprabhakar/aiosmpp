@@ -8,9 +8,11 @@ import math
 import os
 import struct
 import sys
+import time
 import uuid
 from typing import Dict, Any, Optional, TYPE_CHECKING, Type
 
+import aioprometheus
 from aiohttp import web
 
 from aiosmpp.utils import gsm_encode
@@ -19,12 +21,16 @@ from aiosmpp.constants import AddrTON, AddrNPI, ESMClassMode, ESMClassType, Prio
 from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.httpapi.routetable import MTRouteTable, MTInterceptorTable
 from aiosmpp.smppmanager.client import SMPPManagerClient
-from aiosmpp.log import get_stdout_logger
+from aiosmpp.log import get_stdout_logger, get_http_access_logger
 from aiosmpp.sqs import SQSManager, AWSSQSManager
+from aiosmpp.sentry_shim import sentry_middleware
 
 
 if TYPE_CHECKING:
     import multidict
+
+
+web_logger = get_http_access_logger(name='httpclient.http', sentry_client=sentry_middleware.client)
 
 
 class WebHandler(object):
@@ -74,12 +80,16 @@ class WebHandler(object):
         self.interceptor_table = MTInterceptorTable(config)
         self.route_table = MTRouteTable(config)
 
-        # TODO find smppmanager / put autodiscovery in the class
         self.smpp_manager_client = smppmanagerclientclass(
             self.config.smpp_client_url,
             self.config.smpp_client_region,
             route_table=self.route_table, logger=self.logger)
         self.smpp_manager_client_loop = asyncio.ensure_future(self.smpp_manager_client.run(interval=120), loop=self.loop)
+
+        self._http_request_metric = aioprometheus.Histogram('http_request_duration_seconds', 'HTTP Request duration')
+        self._prometheus_registery = aioprometheus.Registry()
+
+        self._prometheus_registery.register(self._http_request_metric)
 
     @property
     def next_long_msg_ref_num(self) -> int:
@@ -90,7 +100,10 @@ class WebHandler(object):
         return self._last_long_msg_ref_num
 
     def app(self) -> web.Application:
-        _app = web.Application()
+        _app = web.Application(middlewares=[
+            logging_middleware,
+            sentry_middleware
+        ])
 
         _app.add_routes((
             web.get('/api/v1/status', self.handler_api_v1_status),
@@ -98,6 +111,8 @@ class WebHandler(object):
             web.get('/send', self.handler_send)  # Legacy Jasmin SMPP compatible send
         ))
 
+        _app['registry'] = self._prometheus_registery
+        _app['metrics_http_access'] = self._http_request_metric
         _app.on_startup.append(self.on_startup)
         _app.on_shutdown.append(self.on_shutdown)
 
@@ -483,6 +498,22 @@ class WebHandler(object):
         return web.Response(text='OK', status=200)
 
 
+@web.middleware
+async def logging_middleware(request: web.Request, handler) -> web.Response:
+    start_time = time.perf_counter()
+    request['req_id'] = str(uuid.uuid4())
+
+    response: web.Response = await handler(request)
+
+    total_time = (time.perf_counter() - start_time)
+    if 'metrics_http_access' in request.app:
+        # Record metrics
+        request.app['metrics_http_access'].add({'path': request.path, 'status': response.status}, total_time)
+    web_logger.info(None, extra={'request': request, 'response': response, 'time': total_time})
+
+    return response
+
+
 def app(argv: list = None) -> web.Application:
     parser = argparse.ArgumentParser(prog='HTTP API')
 
@@ -495,7 +526,8 @@ def app(argv: list = None) -> web.Application:
     args = parser.parse_args(argv[1:])
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logger = get_stdout_logger('httpclient', log_level)
+    # That will automatically create the aiosmpp root logger and attach the sentry handler
+    logger = get_stdout_logger('httpclient', log_level, sentry_client=sentry_middleware.client)
     conf_logger = get_stdout_logger('httpclient.config', log_level)
 
     config = None
