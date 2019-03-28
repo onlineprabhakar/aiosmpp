@@ -8,6 +8,7 @@ from aiosmpp.config.smpp import SMPPConfig
 from aiosmpp.smppmanager.api import WebHandler
 from aiosmpp.smppmanager.manager import SMPPManager
 from aiosmpp.log import get_stdout_logger
+from aiosmpp.sentry_shim import sentry_middleware
 
 from aiohttp import web
 
@@ -24,8 +25,8 @@ def app(argv: list = None) -> web.Application:
     args = parser.parse_args(argv[1:])
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    web_logger = get_stdout_logger('smppclient.api', log_level)
-    manager_logger = get_stdout_logger('smppclient', log_level)
+    manager_logger = get_stdout_logger('smppmanager', log_level, sentry_client=sentry_middleware.client)
+    web_logger = get_stdout_logger('smppmanager.api', log_level)
 
     config = None
     if getattr(args, 'config.file') and getattr(args, 'config.dynamodb.table'):

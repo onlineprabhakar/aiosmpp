@@ -309,7 +309,7 @@ class WebHandler(object):
             pdu['esm_class'] = new_esm_class
 
     @staticmethod
-    def parse_legacy_send_post_parameters(form: 'multidict.MultiDict') -> Dict[str, Any]:
+    def parse_legacy_send_post_parameters(form: 'multidict.MultiDictProxy') -> Dict[str, Any]:
         """
         Takes in a multidict from an `await request.post()` and will return a dict
 

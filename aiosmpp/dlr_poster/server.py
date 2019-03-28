@@ -84,7 +84,7 @@ class DLRPoster(object):
             except asyncio.CancelledError:
                 break
             except Exception as err:
-                logging.exception('Caught exception during SES Loop', exc_info=err)
+                logging.exception('Caught exception during SQS Loop', exc_info=err)
 
     async def _process_dlr(self, data: dict, msg_id: str, receipt_handle: str) -> Tuple[bool, str, str]:
         self.logger.debug("DLR_DATA {0}".format(data))

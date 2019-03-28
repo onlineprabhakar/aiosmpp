@@ -46,7 +46,7 @@ def setup_root_aiosmpp_logger(format_string: str = '[%(asctime)23s - %(name)s - 
 
 def get_http_access_logger(name: str, level: int = logging.INFO, setup_parent_aiosmpp_logger: bool = True,
                            json_on_nontty: bool = True, sentry_client=None):
-    logger = get_stdout_logger(name, level, setup_parent_aiosmpp_logger)
+    logger = get_stdout_logger(name, level, setup_parent_aiosmpp_logger, sentry_client=sentry_client)
 
     logger.propagate = False
     if sys.stdout.isatty() or not json_on_nontty:

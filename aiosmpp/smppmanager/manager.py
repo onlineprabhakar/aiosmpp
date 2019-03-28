@@ -121,7 +121,7 @@ class SMPPConnector(object):
             await self._sqs.create_queue(self.config['mo_queue_name'])
 
             self._sqs_receiver = asyncio.ensure_future(self._sqs_recv_loop())
-            self.logger.info('Set up SES Poll loop')
+            self.logger.info('Set up SQS Poll loop')
         except asyncio.CancelledError:
             raise
         except Exception as err:
@@ -181,7 +181,7 @@ class SMPPConnector(object):
             except asyncio.CancelledError:
                 break
             except Exception as err:
-                self.logger.exception('Caught exception during SES Loop', exc_info=err)
+                self.logger.exception('Caught exception during SQS Loop', exc_info=err)
 
     async def send_pdus(self, event: Dict[str, Any]):
         # DLR will come on the last PDU
