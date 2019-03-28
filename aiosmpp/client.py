@@ -51,6 +51,7 @@ class SMPPClientProtocol(asyncio.Protocol):
         self.addr_ton = 1
         self.addr_npi = 1
 
+        # TODO make configurable
         self.bind_resp_timeout = 0.15  # 150ms
         self.submit_sm_resp_timeout = 0.15  # 150ms
 
@@ -238,8 +239,7 @@ class SMPPClientProtocol(asyncio.Protocol):
             raise
         except Exception as err:
             self.logger.exception('Caught exception whilst submitsm', exc_info=err)
-
-        return None
+            raise
 
     def deliver_sm(self, pkt: Dict[str, Any]):
         self.logger.debug('Got DELIVER_SM {0}'.format(pkt))

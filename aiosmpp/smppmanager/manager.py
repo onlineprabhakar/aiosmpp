@@ -159,7 +159,8 @@ class SMPPConnector(object):
                         self.logger.info('{0} | Processing SMPP Request {1} -> {2}'.format(req_id, src_addr, dest_addr))
 
                         try:
-                            await self.send_pdus(payload)
+                            if self._smpp_proto:  # Check SMPP Protocol is up
+                                await self.send_pdus(payload)
                             ack = True
                         except Exception as err:
                             self.logger.exception('Caught exception whilst sending PDUs {0}'.format(err), exc_info=err)
@@ -190,23 +191,20 @@ class SMPPConnector(object):
         has_dlr = 'dlr' in event and event['dlr']
 
         for index, pdu in enumerate(event['pdus']):
+            # Exceptions have been caught higher up
             result = await self._smpp_proto.send_submit_sm(timeout=0.5, **pdu)
 
-            if result['status'] != 0:
-                self.logger.warning('Failed to send submit_sm, {0}'.format(result))
-                # TODO DEAL WITH ERROR/FAIL
-                # If DLR put on redis
-
-                break
-
-            else:
-                self.logger.info('Sent submit_sm, message id: {0}'.format(result['payload']['message_id']))
+            self.logger.info('Sent submit_sm, message id: {0}'.format(result['payload']['message_id']))
 
             if has_dlr and index == last_pdu:
                 redis_payload = event['dlr'].copy()
                 redis_payload['id'] = event['req_id']
                 redis_payload = json.dumps(redis_payload)
-                msg_id = result['payload']['message_id']
+                msg_id = result['payload'].get('message_id')
+
+                if msg_id is None:
+                    self.logger.warning('submitsm for event {0} did not return msg_id so nothing to put in redis'.format(event['req_id']))
+                    continue
 
                 try:
                     await self._redis.set(msg_id, redis_payload, expire=self.config['dlr_expiry'])
