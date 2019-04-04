@@ -162,13 +162,15 @@ class SMPPConnector(object):
                             if self._smpp_proto:  # Check SMPP Protocol is up
                                 await self.send_pdus(payload)
                             ack = True
+                        except TimeoutError:
+                            self.logger.warning('Timed out sending submit_sm for {0}, it\'ll get redelivered'.format(msg_id))
                         except Exception as err:
                             self.logger.exception('Caught exception whilst sending PDUs {0}'.format(err), exc_info=err)
 
                     if ack:
                         to_delete.append({'Id': msg_id, 'ReceiptHandle': receipt_handle})
                     else:
-                        self.logger.warning('Message {0} not ack\'d, it\'ll get redelivered'.format(self.logger))
+                        self.logger.warning('Message {0} not ack\'d, it\'ll get redelivered'.format(msg_id))
 
                 if to_delete:
                     await self._sqs.delete_messages(self._queue_name, to_delete)
@@ -192,7 +194,7 @@ class SMPPConnector(object):
 
         for index, pdu in enumerate(event['pdus']):
             # Exceptions have been caught higher up
-            result = await self._smpp_proto.send_submit_sm(timeout=0.5, **pdu)
+            result = await self._smpp_proto.send_submit_sm(timeout=65, **pdu)
 
             self.logger.info('Sent submit_sm, message id: {0}'.format(result['payload']['message_id']))
 

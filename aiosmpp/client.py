@@ -52,8 +52,8 @@ class SMPPClientProtocol(asyncio.Protocol):
         self.addr_npi = 1
 
         # TODO make configurable
-        self.bind_resp_timeout = 0.15  # 150ms
-        self.submit_sm_resp_timeout = 0.15  # 150ms
+        self.bind_resp_timeout = 2  # 2s
+        self.submit_sm_resp_timeout = 60  # 60s
 
     def __del__(self):
         self.close()
@@ -107,8 +107,10 @@ class SMPPClientProtocol(asyncio.Protocol):
 
             return
 
-        # All else fails
-        self.logger.critical('No req matching {0}'.format(hdr['seq_no']))
+        # So either we're expecting a response or got a deliver_sm from the server
+        # Anything else and we have no clue what it is.
+        # Its entirely possibe PDUs that have been sent and timed out then get responses that end up here
+        self.logger.warning('SMPP PDU received with unexpected sequence no {0}, PDU id {1}'.format(hdr['seq_no'], hdr['id']))
 
     def connection_lost(self, exc):
         self.logger.warning('Lost connection to {0[0]}:{0[1]}'.format(self.transport.get_extra_info('peername')))
@@ -166,13 +168,14 @@ class SMPPClientProtocol(asyncio.Protocol):
 
         return bind_resp
 
-    async def timeout_coro(self, _type, timeout, future: Optional[asyncio.Future] = None):
+    async def timeout_coro(self, _type, timeout, future: Optional[asyncio.Future] = None, close_session: bool = True, seq_no = None):
         try:
             await asyncio.sleep(timeout)
             if future:
-                future.set_exception(TimeoutError('Failed to receive {0} in {1} seconds'.format(_type, timeout)))
-            self.logger.warning('Failed to receive {0} in {1} seconds'.format(_type, timeout))
-            self._close_session()
+                future.set_exception(TimeoutError('Failed to receive {0} in {1} seconds - PDU Sequence number {2}'.format(_type, timeout, seq_no)))
+            self.logger.warning('Failed to receive {0} in {1} seconds - PDU Sequence number {2}'.format(_type, timeout, seq_no))
+            if close_session:
+                self._close_session()
         except asyncio.CancelledError:
             pass
 
@@ -235,7 +238,7 @@ class SMPPClientProtocol(asyncio.Protocol):
             await asyncio.wait_for(future, timeout=timeout)
             return future.result()
         except asyncio.TimeoutError as err:
-            self.logger.error('submit_sm timed out: {0}'.format(err))
+            self.logger.warning('submit_sm timed out: {0}'.format(err))
             raise
         except Exception as err:
             self.logger.exception('Caught exception whilst submitsm', exc_info=err)
@@ -308,8 +311,9 @@ class SMPPClientProtocol(asyncio.Protocol):
         )
 
         self.pending_responses[seq_no] = (
+            # Am not classing a timeout on receiving a submit_sm_resp bad enough to kill the connection
             asyncio.ensure_future(
-                self.timeout_coro('submit_sm', self.submit_sm_resp_timeout, asyncio_future),
+                self.timeout_coro('submit_sm', self.submit_sm_resp_timeout, asyncio_future, close_session=False, seq_no=seq_no),
                 loop=self.loop
             ),
             self.submit_sm_resp,
