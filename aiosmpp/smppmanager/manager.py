@@ -205,7 +205,8 @@ class SMPPConnector(object):
                 msg_id = result['payload'].get('message_id')
 
                 if msg_id is None:
-                    self.logger.warning('submitsm for event {0} did not return msg_id so nothing to put in redis'.format(event['req_id']))
+                    self.logger.warning('submitsm for event {0} did not return msg_id so nothing '
+                                        'to put in redis'.format(event['req_id']), extra={'stack': True})
                     continue
 
                 try:

@@ -1,4 +1,5 @@
 import datetime
+from itertools import cycle
 from typing import List, Union, Dict, Any
 
 from aiosmpp.interceptor import Interceptor
@@ -92,6 +93,55 @@ class StaticRoute(Route):
         return '<{0: 4d} StaticRoute: {1}>'.format(self.order, self.connector_name)
 
 
+class SmartRoundRobinRoute(Route):
+    def __init__(self, order: int, connectors, filters=None, config=None, status=None):
+        self._connectors = connectors.split(',')
+        self._connectors_status = status
+
+        self._connector_cycle = cycle(self._connectors)
+        self._num_connectors = len(self._connectors)
+
+        super(SmartRoundRobinRoute, self).__init__(order, 'rr', filters, config)
+
+    def evaluate(self, event):
+        # Check if we're connected via SMPP
+        # if not, this route is useless
+        result = True
+
+        for _filter in self.filters:
+            try:
+                result &= _filter.evaluate(event)
+            except Exception as err:
+                # TODO log
+                print(err)
+                result = False
+
+            # Short circuit
+            if not result:
+                break
+
+        return result
+
+    def _get_connector(self) -> Union[SMPPConnector, None]:
+        count = 0
+        while count < self._num_connectors:
+            connector_name = next(self._connector_cycle)
+
+            if connector_name not in self.config.connectors:
+                count += 1
+                continue
+
+            if not self._connectors_status.get(connector_name, '').startswith('BOUND'):
+                count += 1
+                continue
+
+            return SMPPConnector(connector_name, self.config.connectors[connector_name])
+        return None
+
+    def __repr__(self):
+        return '<{0: 4d} SmartRoundRobinRoute: {1}>'.format(self.order, ','.join(self._connectors))
+
+
 class RouteTable(object):
     def __init__(self, config: SMPPConfig):
         self.config = config
@@ -137,6 +187,8 @@ class MTRouteTable(RouteTable):
 
         if route_type in ('static', 'default'):
             return StaticRoute(route_index, route_data['connector'], needed_filters, config=self.config)
+        elif route_type == 'smartrr':
+            return SmartRoundRobinRoute(route_index, route_data['connectors'], needed_filters, config=self.config, status=self._connector_status)
         else:
             # TODO log
             print('Unknown route type {0}'.format(route_type))
